@@ -13,6 +13,7 @@
 #define SMS_TEST_CRASH_H
 
 #if defined(_WIN32)
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
@@ -22,6 +23,45 @@ static const char *volatile test_crash_where = "starting";
 static inline void test_crash_phase(const char *where)
 {
     test_crash_where = where;
+}
+
+/* One line per frame of the faulting thread, "FRAME <module> <rva>", from
+ * the x64 unwind data every module carries (no symbols needed here; CI
+ * turns the RVAs into names with addr2line). */
+static void test_crash_frames(const CONTEXT *start)
+{
+#if defined(_M_X64) || defined(__x86_64__)
+    CONTEXT ctx = *start;
+    for (int i = 0; i < 32 && ctx.Rip; i++)
+    {
+        HMODULE mod = NULL;
+        char name[MAX_PATH] = "?";
+        DWORD64 base = 0;
+        PRUNTIME_FUNCTION fn;
+
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)ctx.Rip, &mod))
+            GetModuleFileNameA(mod, name, sizeof name);
+        fprintf(stderr, "FRAME %s 0x%llx\n", name,
+                (unsigned long long)(ctx.Rip - (DWORD64)(uintptr_t)mod));
+        fn = RtlLookupFunctionEntry(ctx.Rip, &base, NULL);
+        if (!fn)
+        {
+            /* a leaf: the return address is on top of the stack */
+            ctx.Rip = *(DWORD64 *)(uintptr_t)ctx.Rsp;
+            ctx.Rsp += 8;
+        }
+        else
+        {
+            void *handler = NULL;
+            DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, fn, &ctx, &handler, &frame, NULL);
+        }
+    }
+#else
+    (void)start;
+#endif
 }
 
 static LONG WINAPI test_crash_filter(EXCEPTION_POINTERS *e)
@@ -43,6 +83,7 @@ static LONG WINAPI test_crash_filter(EXCEPTION_POINTERS *e)
         fprintf(stderr, "CRASH: %s address %p\n",
                 e->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
                 (void *)e->ExceptionRecord->ExceptionInformation[1]);
+    test_crash_frames(e->ContextRecord);
     fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
 }
