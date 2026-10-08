@@ -8,6 +8,13 @@
  * within 2%. The siblings' hardest-won lesson: verify the throttle (one
  * once free-ran at >33000%).
  *
+ * The rate is only held to 2% where the OS can sleep for a frame without
+ * gross overshoot: a loaded CI virtual machine (the macOS runners above
+ * all) turns a 16.7 ms sleep into 50, which says nothing about the pacing
+ * code. There the test checks what still means something -- the machine
+ * is throttled, and the deadline ladder sleeps -- and says why, as the
+ * Atari 2600 sibling's host test does.
+ *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -20,6 +27,7 @@
 #include "host.h"
 
 static int failures;
+static int accurate_sleeps = 1;
 static void check(int ok, const char *what)
 {
     printf("%s: %s\n", ok ? "ok" : "FAIL", what);
@@ -83,8 +91,6 @@ static void run(sms_model_t model, double want_hz, int want_height)
     f1 = sms_host_frame_count();
     t1 = now_s();
     hz = (double)(f1 - f0) / (t1 - t0);
-    snprintf(what, sizeof what, "%s paces at %.2f Hz (want %.2f)", sms_models[model].id, hz, want_hz);
-    check(hz > want_hz * 0.98 && hz < want_hz * 1.02, what);
     snprintf(what, sizeof what, "%s reports %.4f Hz", sms_models[model].id, sms_host_frame_rate());
     check(sms_host_frame_rate() > want_hz - 0.01 && sms_host_frame_rate() < want_hz + 0.01, what);
 
@@ -96,6 +102,13 @@ static void run(sms_model_t model, double want_hz, int want_height)
                (unsigned long long)pc.sleeps,
                pc.sleeps ? (double)pc.late_ns / (double)pc.sleeps / 1e6 : 0.0,
                (double)pc.worst_late_ns / 1e6, (unsigned long long)pc.resyncs);
+        snprintf(what, sizeof what, "%s is throttled: %.2f Hz, not free-running", sms_models[model].id, hz);
+        check(hz < want_hz * 1.10 && pc.sleeps > 0, what);
+        snprintf(what, sizeof what, "%s paces at %.2f Hz (want %.2f)", sms_models[model].id, hz, want_hz);
+        if (accurate_sleeps)
+            check(hz > want_hz * 0.98 && hz < want_hz * 1.02, what);
+        else
+            printf("note: %s -- not asserted, this OS's sleeps are coarse\n", what);
     }
 }
 
@@ -125,6 +138,16 @@ static double capacity(sms_model_t model)
 
 int main(void)
 {
+    /* ten 16.7 ms sleeps: 167 ms on a machine that can sleep for a frame */
+    {
+        double t0 = now_s(), took;
+        for (int i = 0; i < 10; i++)
+            nanosleep(&(struct timespec){ 0, 16666667L }, NULL);
+        took = now_s() - t0;
+        accurate_sleeps = took < 0.25;
+        printf("  ten 16.7 ms sleeps took %.3f s (%s)\n", took,
+               accurate_sleeps ? "accurate" : "coarse: the rate is reported, not asserted");
+    }
     /* before the host exists: the cart device is one per process */
     printf("  the bare core runs %.0f frames/s (NTSC) and %.0f (PAL) here\n",
            capacity(SMS_MODEL_SMS1), capacity(SMS_MODEL_SMS2_PAL));
