@@ -13,8 +13,8 @@ name: Release
 #
 # What is and is not proven, so a red run can be read correctly:
 #   linux, flatpak   run locally and in CI; a failure is a regression.
-#   windows          the whole app cross-builds with mingw-w64 and its tests
-#                    pass under Wine, but this is the first NATIVE build.
+#   windows          built and tested natively on every push (windows.yml);
+#                    new here: the static SDL3, the import-table check, NSIS.
 #   macos            compiled only on CI (macos.yml), never on the
 #                    development machine. A failure here is real signal about
 #                    frontends/macos, not necessarily the workflow.
@@ -310,9 +310,24 @@ jobs:
           path: dist/FujiNet-Go-SMS
           if-no-files-found: error
 
+      # MSYS2's NSIS 3.13 stopped finding its own nsDialogs plugin (which
+      # the MUI2 welcome and finish pages need) where 3.12 did. Point
+      # makensis at whatever the package installed, per architecture folder;
+      # with none at all the installer leaves out just those two pages.
       - name: Build the installer
         run: |
-          makensis -V2 \
+          makensis -VERSION
+          X=()
+          while IFS= read -r f; do
+            d=$(dirname "$f"); a=$(basename "$d")
+            echo "nsDialogs plugin: $f"
+            case "$a" in
+              x86-unicode|x86-ansi|amd64-unicode) X+=("-X!addplugindir /$a $(cygpath -w "$d")") ;;
+              *) X+=("-X!addplugindir $(cygpath -w "$d")") ;;
+            esac
+          done < <(find /ucrt64 -iname nsDialogs.dll 2>/dev/null)
+          [ ${#X[@]} -gt 0 ] || { echo "::warning::no nsDialogs plugin: no welcome/finish pages"; X+=(-DNO_NSDIALOGS); }
+          makensis -V2 "${X[@]}" \
             -DVERSION="${{ needs.check-version.outputs.version }}" \
             -DSRCDIR="$(cygpath -w "$PWD/dist/FujiNet-Go-SMS")" \
             -DOUTFILE="$(cygpath -w "$PWD/dist/FujiNet-Go-SMS-Setup.exe")" \

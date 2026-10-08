@@ -63,10 +63,16 @@ VIAddVersionKey "LegalCopyright"  "GPL-3.0-or-later"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXENAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "Run ${APPNAME}"
 
+; The welcome and finish pages are nsDialogs pages; a makensis without the
+; plugin (-DNO_NSDIALOGS, see release.yml) builds the rest.
+!ifndef NO_NSDIALOGS
 !insertmacro MUI_PAGE_WELCOME
+!endif
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!ifndef NO_NSDIALOGS
 !insertmacro MUI_PAGE_FINISH
+!endif
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
