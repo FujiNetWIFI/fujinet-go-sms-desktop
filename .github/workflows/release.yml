@@ -317,15 +317,20 @@ jobs:
       - name: Build the installer
         run: |
           makensis -VERSION
+          ls /ucrt64/share/nsis/Stubs 2>/dev/null | head -20 || true
+          # The folder no longer names the architecture (3.13 has
+          # Plugins/unicode/), so ask the DLL itself; the script then targets
+          # what the plugins were built for.
           X=()
           while IFS= read -r f; do
-            d=$(dirname "$f"); a=$(basename "$d")
-            echo "nsDialogs plugin: $f"
-            case "$a" in
-              x86-unicode|x86-ansi|amd64-unicode) X+=("-X!addplugindir /$a $(cygpath -w "$d")") ;;
-              *) X+=("-X!addplugindir $(cygpath -w "$d")") ;;
+            d=$(dirname "$f")
+            fmt=$(objdump -f "$f" 2>/dev/null | sed -n 's/.*file format //p' | head -1)
+            echo "nsDialogs plugin: $f ($fmt)"
+            case "$fmt" in
+              *x86-64*) X+=("-DNSIS_TARGET=amd64-unicode" "-X!addplugindir /amd64-unicode $(cygpath -w "$d")") ;;
+              *i386*)   X+=("-X!addplugindir /x86-unicode $(cygpath -w "$d")") ;;
             esac
-          done < <(find /ucrt64 -iname nsDialogs.dll 2>/dev/null)
+          done < <(find /ucrt64 -iname nsDialogs.dll -ipath '*unicode*' 2>/dev/null)
           [ ${#X[@]} -gt 0 ] || { echo "::warning::no nsDialogs plugin: no welcome/finish pages"; X+=(-DNO_NSDIALOGS); }
           makensis -V2 "${X[@]}" \
             -DVERSION="${{ needs.check-version.outputs.version }}" \

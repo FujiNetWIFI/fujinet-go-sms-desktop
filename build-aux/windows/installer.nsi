@@ -17,6 +17,11 @@
 ; makensis -DVERSION=x.y.z -DSRCDIR=<staged folder> -DOUTFILE=<exe> installer.nsi
 
 Unicode true
+; The architecture makensis's plugins were built for (release.yml reads it
+; off the nsDialogs DLL); x86-unicode when not given.
+!ifdef NSIS_TARGET
+  Target ${NSIS_TARGET}
+!endif
 
 !ifndef VERSION
   !define VERSION "0.0.0"
