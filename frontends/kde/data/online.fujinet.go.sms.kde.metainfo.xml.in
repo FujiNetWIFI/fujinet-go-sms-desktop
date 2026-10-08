@@ -48,6 +48,20 @@
     <name>Thomas Cherryhomes</name>
   </developer>
   <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The FujiNet CONFIG client browsing network hosts from the console</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/main/data/screenshots/1_running_config.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The built-in debugger's live VDP viewer</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/main/data/screenshots/2_vdp_debugger.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Preferences</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/main/data/screenshots/3_preferences.png</image>
+    </screenshot>
+  </screenshots>
   <releases>
     <!-- The CURRENT release templates its version from @PROJECT_VERSION@, so
          it cannot disagree with the tree; past releases are literal. The

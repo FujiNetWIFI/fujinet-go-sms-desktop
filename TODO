@@ -79,8 +79,10 @@ M5-M8 frontends: GNOME, KDE, Windows, macOS                           [~]
   Sound & I/O, Breakpoints, Cart), the FujiNet console log; SMS_OPEN_* hooks.
   [x] GNOME, KDE: no warnings, desktop + metainfo validated, smoke-launched
       headless (Broadway / offscreen) with every window open
-  [x] Windows: cross-built with mingw-w64, no warnings
-  [ ] Windows native (CI), macOS arm64 + x86_64 (CI) -- first compile there
+  [x] Windows: cross-built with mingw-w64, no warnings; native MSYS2 build
+      and tests green on CI
+  [x] macOS: compiled and tested on CI, arm64 and x86_64 (never run on a
+      Mac yet; the runners' coarse sleeps are reported, not asserted)
 M9  packaging                                                         [~]
   [x] build-aux/flatpak/online.fujinet.go.sms.{gnome,kde}.yml (GNOME 49 /
       KDE 6.11, SDL3 3.4.12, firmware + mbedTLS pinned, -DWITH_SMS_ROMS=OFF);
@@ -91,7 +93,13 @@ M10 CI/CD                                                             [~]
   [x] linux.yml, windows.yml (green since M0)
   [x] macos.yml (arm64 + x86_64), flatpak.yml, release.yml (dry run on
       workflow_dispatch; draft release only for a v* tag)
-  [ ] all green with the frontends in
+  [x] linux, windows, macos (arm64 + x86_64), flatpak (gnome + kde) green
+      with the frontends in
+  [ ] release.yml dry run (workflow_dispatch)
+  Fixed on the way: the FujiNet DLL's static teardown double-freed the SD
+  host's directory cache at exit (Windows crash after CONFIG listed SD) --
+  the desktop entry releases the hosts first; boot_smoke gates the 2%
+  rate check on the OS sleeping accurately (the macOS runners don't).
 M11 family audit                                                      [ ]
 
 Verification beyond ctest (local):

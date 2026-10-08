@@ -92,6 +92,13 @@ add_test(NAME media COMMAND media_test)
 sms_session_test(gamepad_test gamepad_test.c)
 add_test(NAME gamepad COMMAND gamepad_test)
 
+# The gamepad layer end to end with an SDL3 virtual gamepad: hot-plug, the
+# default mapping onto the joypad and the console's buttons, unplug
+# releasing what was held. SKIPs (77) where SDL has no virtual joysticks.
+sms_session_test(gamepad_map_test gamepad_map_test.c)
+add_test(NAME gamepad_map COMMAND gamepad_map_test)
+set_tests_properties(gamepad_map PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # The debugger contract: attach stops the machine, registers, every step
 # kind, disassembly, breakpoints of every class with conditions, memory,
 # VRAM/CRAM, the VDP views, I/O, the cartridge tab, symbols in every format,
