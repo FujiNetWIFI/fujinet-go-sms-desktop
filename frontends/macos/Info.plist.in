@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>FujiNet Go SMS</string>
+  <key>CFBundleDisplayName</key>
+  <string>FujiNet Go SMS</string>
+  <key>CFBundleIdentifier</key>
+  <string>online.fujinet.go.sms.macos</string>
+  <key>CFBundleExecutable</key>
+  <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIconFile</key>
+  <string>${MACOSX_BUNDLE_ICON_FILE}</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${PROJECT_VERSION}</string>
+  <key>CFBundleVersion</key>
+  <string>${PROJECT_VERSION}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.3</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.games</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2026 Thomas Cherryhomes. GPL-3.0-or-later.</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <!-- Only the extensions that mean a Master System / SG-1000 image: .bin
+       and .rom open from the app's own panel, but claiming them here would
+       put the app on every .bin in Finder's Open With. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Master System cartridge image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>sms</string>
+        <string>sg</string>
+      </array>
+    </dict>
+  </array>
+  <!-- The FujiNet web UI is plain HTTP on loopback. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

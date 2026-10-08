@@ -225,7 +225,9 @@ int  smsdebug_load_symbols(smsdebug *d, const char *path, char *msg, int msgsz);
 /* ---- the cartridge ------------------------------------------------------------ */
 typedef struct {
     int present, link_up, busy, direct, booted_game;
-    int mode;                /* FN_MODE_*: 0 CONFIG, 1 game, 2 app (mailbox live) */
+    int resident_client;     /* an opened FujiNet client (<= 32K) in CONFIG's place */
+    int mode;                /* FN_MODE_*: 0 CONFIG (or a resident client), 1 game,
+                                2 app (mailbox live) */
     const char *mode_name;
     int mapper;              /* SMSMAP_*, -1 for CONFIG */
     char mapper_name[32];

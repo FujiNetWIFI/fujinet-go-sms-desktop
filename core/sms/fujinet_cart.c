@@ -75,6 +75,8 @@ struct sms_cart {
     smsmap_t res_map, game_map;
     smsmap_t *live;
     smsmap_plan_t direct_plan;
+    smsmap_plan_t resident_plan;        /* an opened client serving RESIDENT */
+    bool resident_client;
     fuji_load_t loader;
     fuji_load_port_t load_port;
     bool game, mbox, ram_we, load;
@@ -841,6 +843,7 @@ int sms_cart_power_on(sms_cart_t *c, const uint8_t *image, uint32_t len,
     c->live = &c->res_map;
 
     /* the image, as the slot hands it over */
+    c->resident_client = false;
     free(c->file);
     c->file = NULL;
     c->file_len = 0;
@@ -885,6 +888,8 @@ int sms_cart_power_on(sms_cart_t *c, const uint8_t *image, uint32_t len,
         {
             memset(c->resident, 0xff, sizeof c->resident);
             memcpy(c->resident, c->file, c->file_len);
+            c->resident_plan = plan;
+            c->resident_client = true;
             if (c->debug)
                 fprintf(stderr, "fujinet: %u-byte client, resident\n", c->file_len);
         }
@@ -970,7 +975,8 @@ void sms_cart_status(sms_cart_t *c, sms_cart_status_t *out)
     out->busy = atomic_load(&c->busy);
     out->direct = c->direct;
     out->mode = c->bus.mode;
-    out->booted_game = c->direct || c->bus.mode != FN_MODE_RESIDENT;
+    out->resident_client = c->resident_client;
+    out->booted_game = c->direct || c->resident_client || c->bus.mode != FN_MODE_RESIDENT;
     if (c->bus.mode != FN_MODE_RESIDENT && c->live)
     {
         out->mapper = c->live->plan.kind;
@@ -982,6 +988,16 @@ void sms_cart_status(sms_cart_t *c, sms_cart_status_t *out)
         out->image_crc = c->live->plan.crc;
         out->ram_size = c->live->plan.ram_size;
         out->claim = c->live->plan.claim;
+    }
+    else if (c->resident_client)
+    {
+        /* an opened FujiNet client of 32K or less, served in CONFIG's
+         * place as the cartridge serves its resident image */
+        out->mapper = -1;
+        out->mapper_name = "resident";
+        out->image_size = c->resident_plan.size;
+        out->image_crc = c->resident_plan.crc;
+        out->claim = true;
     }
     else
     {

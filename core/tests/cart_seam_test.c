@@ -110,6 +110,28 @@ static void codemasters_routing(void)
     free(img);
 }
 
+/* A claimed client of at most 32K is served RESIDENT, in CONFIG's place,
+ * as the cartridge serves its own resident image -- and says so. */
+static void resident_client(void)
+{
+    uint8_t *img = image(2, 1);    /* 32K, claimed */
+    sms_cart_t *c = power(img, 2 * 0x4000, NULL);
+    sms_cart_status_t st;
+
+    sms_cart_status(c, &st);
+    check(st.mode == FN_MODE_RESIDENT && !st.direct, "a claimed 32K client is served RESIDENT");
+    check(st.resident_client && st.booted_game, "and reported as an opened client, not CONFIG");
+    check(st.image_size == 0x8000 && st.claim, "with its size and claim");
+    check(rd(c, 0x4000) == 1, "its own bytes are on the bus");
+    sms_cart_destroy(c);
+    free(img);
+
+    c = power(NULL, 0, NULL);
+    sms_cart_status(c, &st);
+    check(!st.resident_client && !st.booted_game, "CONFIG itself is not a client");
+    sms_cart_destroy(c);
+}
+
 static void app_and_flip(void)
 {
     uint8_t *img = image(4, 1);    /* 64K, claimed: direct-booted, not resident */
@@ -189,6 +211,7 @@ int main(void)
 {
     sega_routing();
     codemasters_routing();
+    resident_client();
     app_and_flip();
     machine_mirror();
     printf("%d failure(s)\n", failures);

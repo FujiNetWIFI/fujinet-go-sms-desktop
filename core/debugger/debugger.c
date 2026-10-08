@@ -1359,8 +1359,10 @@ static void cart_get_locked(smsdebug_cart *o)
     o->busy = st.busy;
     o->direct = st.direct;
     o->booted_game = st.booted_game;
+    o->resident_client = st.resident_client;
     o->mode = st.mode;
-    o->mode_name = (st.mode >= 0 && st.mode <= 2) ? modes[st.mode] : "?";
+    o->mode_name = st.resident_client && st.mode == FN_MODE_RESIDENT ? "resident client"
+                 : (st.mode >= 0 && st.mode <= 2) ? modes[st.mode] : "?";
     o->mapper = st.mapper;
     snprintf(o->mapper_name, sizeof o->mapper_name, "%s", st.mapper_name ? st.mapper_name : "");
     memcpy(o->bank, st.bank, sizeof o->bank);
@@ -1408,6 +1410,10 @@ int smsdebug_cart_info(smsdebug *d, char *dst, int dstsz)
     smsdebug_cart_get(d, &c);
     if (!c.present)
         return snprintf(dst, (size_t)dstsz, "FujiNet cartridge: not powered");
+    if (c.mode == FN_MODE_RESIDENT && c.resident_client)
+        return snprintf(dst, (size_t)dstsz,
+                        "FujiNet cartridge: resident client, %u bytes (opened file), link %s",
+                        c.image_size, c.link_up ? "up" : "down");
     if (c.mode == FN_MODE_RESIDENT)
         return snprintf(dst, (size_t)dstsz, "FujiNet cartridge: CONFIG, link %s",
                         c.link_up ? "up" : "down");

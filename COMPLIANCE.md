@@ -17,6 +17,8 @@ first public build, in the family tradition (see
 | **The cartridge firmware's own sources** (`fujimail.c`, `fujibus.c`, `smsmap.c`, `smsmap_db.c`, `fuji_load.c` and headers, `sms_cart.h`, `fuji_mailbox.h`, the loader page `smsloaderrom.h`) | `fujinet-firmware` `pico/sms/firmware` on the `add-sms` branch, staged verbatim into `core/sms/fuji-generated/` by `cmake/StageFujiProto.cmake` | as marked in each file (the FujiNet project's, © Thomas Cherryhomes) | compiled into `sms_core`, never patched |
 | **The CONFIG client** (`fujiconfigrom.h`, 32 768 bytes) | [`FujiNetWIFI/fujinet-config`](https://github.com/FujiNetWIFI/fujinet-config) `sms/`, built with z88dk and `fujinet-lib`'s `sms` target, converted by `pico/sms/tools/mkromh.py`, staged from `pico/sms/firmware/baked/` | GPL-3.0 (the FujiNet project's) | the cartridge's resident image, as on the hardware |
 | **FujiNet firmware** (`libfujinet`) | [`FujiNetWIFI/fujinet-firmware`](https://github.com/FujiNetWIFI/fujinet-firmware), PC target `RS232` | GPL-3.0-or-later | built as a shared library by `tools/fujinet/build-fujinet-desktop.sh`, `dlopen`'d at run time |
+| The frontends (`frontends/{gnome,kde,windows,macos}`) | ported from the NES sibling's (this project's family, © Thomas Cherryhomes) | GPL-3.0-or-later | one executable per platform |
+| GTK4, libadwaita (GNOME) / Qt6 (KDE) | the GNOME and Qt projects | LGPL-2.1-or-later / LGPL-3.0 | system libraries, dynamically linked |
 | SDL3 | libsdl-org | Zlib | system package on Linux; linked statically on macOS and Windows |
 | mbedTLS 3.6.x | Mbed-TLS | Apache-2.0 | for `libfujinet`: system package where it is a usable 3.x, otherwise the pinned source |
 
@@ -69,9 +71,16 @@ falls back to ymfm's own patch table.
   with a plausible size and an unknown CRC is accepted with a warning.
 - `-DWITH_SMS_ROMS=ON` embeds whatever recognised images a developer put in
   `tools/roms/`, for local development only. Every artifact this project
-  publishes is built with it **OFF**, and the `no_embedded_roms_*` tests
+  publishes is built with it **OFF** (every CI, release and Flatpak
+  configure passes it explicitly), and the `no_embedded_roms_*` tests
   (`core/tests/no_embedded_roms.py`) check the shipped binaries for the
   ROMs' bytes.
+- The tests never use Sega code either. `bios_synth` runs a BIOS the test
+  writes itself (a few dozen hand-assembled bytes that do what a BIOS does
+  at hand-over), and `media` checks identification with filler images whose
+  last four bytes steer the CRC-32 to a table entry. Comparisons with real
+  BIOS boots (`tools/ab/mame_ab.py --bios`) are run locally against a
+  developer's own MAME ROM set and are not part of the repository.
 
 ## Trademarks and names
 

@@ -83,6 +83,8 @@ typedef struct {
     bool link_up;             /* the BoIP socket is connected */
     bool busy;                /* a FujiBus transaction is in flight */
     bool direct;              /* an opened image, direct-booted */
+    bool resident_client;     /* an opened FujiNet client (<= 32K, claimed)
+                                 served in CONFIG's place */
     bool booted_game;         /* anything other than CONFIG is in the SRAM */
     int mode;                 /* FN_MODE_* */
     int mapper;               /* SMSMAP_* of the live map (GAME/APP) */

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>online.fujinet.go.sms.kde</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>FujiNet Go SMS</name>
+  <summary>A Sega Master System with a built-in FujiNet</summary>
+  <description>
+    <p>
+      A self-contained Sega Master System with a FujiNet built in: browse a
+      network host from the console with the CONFIG client, boot cartridges
+      over the network, and let the booted program keep talking to the
+      network, all in one application.
+    </p>
+    <p>
+      The machine is transposed from MAME's Master System drivers, with the
+      FujiNet SMS cartridge running the real cartridge firmware's own
+      protocol sources and mapper engine, so it behaves exactly as the
+      hardware does: CONFIG is the cartridge's resident image, games booted
+      over the network are copied into its SRAM, and a local .sms or .sg
+      cartridge file can be opened in place of CONFIG. Import Cartridge to
+      SD puts a cartridge on FujiNet's SD folder, to boot it from CONFIG.
+    </p>
+    <p>
+      Six consoles are built in: the Master System and Master System II,
+      each in NTSC and PAL, the Japanese Master System with its YM2413 FM
+      sound, and the Mark III with the optional FM Sound Unit.
+    </p>
+    <p>
+      Both joypads are on screen and remappable, gamepads are picked up as
+      they are plugged in, and a native debugger is a key press away: a
+      command prompt, the Z80 and RAM, a disassembly with breakpoints, the
+      VDP with its name table, tiles, sprites and palette, the PSG, FM and
+      I/O ports, and the FujiNet cartridge.
+    </p>
+    <p>
+      Nothing copyrighted is included and no BIOS is ever required: every
+      console boots the cartridge directly. A BIOS of your own can
+      optionally be imported from the application, and the only built-in
+      program is FujiNet's own CONFIG client.
+    </p>
+  </description>
+  <launchable type="desktop-id">online.fujinet.go.sms.kde.desktop</launchable>
+  <url type="homepage">https://fujinet.online/</url>
+  <url type="bugtracker">https://github.com/FujiNetWIFI/fujinet-go-sms-desktop/issues</url>
+  <url type="vcs-browser">https://github.com/FujiNetWIFI/fujinet-go-sms-desktop</url>
+  <developer id="online.fujinet">
+    <name>Thomas Cherryhomes</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <!-- The CURRENT release templates its version from @PROJECT_VERSION@, so
+         it cannot disagree with the tree; past releases are literal. The
+         release job checks that this first entry is still a template. -->
+    <release version="@PROJECT_VERSION@" date="2026-10-07">
+      <description>
+        <p>
+          First release: the Master System transposed from MAME with the
+          FujiNet SMS cartridge, an in-process FujiNet, native GNOME, KDE,
+          macOS and Windows frontends, six consoles including the Japanese
+          Master System and the Mark III, both joypads on screen,
+          hotplugged gamepads, an optional BIOS import, Soft Reset and
+          Reset to CONFIG, and a native debugger.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FujiNet Go SMS
+GenericName=Master System Emulator
+Comment=A Sega Master System with a built-in FujiNet
+Exec=fujinet-go-sms-gnome %f
+Icon=online.fujinet.go.sms.gnome
+Terminal=false
+Categories=Game;Emulator;
+Keywords=sms;sega;master system;mark iii;sg-1000;fujinet;emulator;retro;
+MimeType=application/x-sms-rom;application/x-sg1000-rom;
+StartupNotify=true
