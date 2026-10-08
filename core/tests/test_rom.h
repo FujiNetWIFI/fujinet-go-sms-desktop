@@ -58,4 +58,38 @@ static inline size_t test_rom_write(const char *path, int kind)
     return n == size ? n : 0;
 }
 
+/* An 8K "BIOS" that does what a real one does at the end: it copies a stub
+ * to RAM that enables the cartridge, disables itself through $3E and jumps
+ * to $0000. Its CRC is in no table, so Import BIOS takes it as custom.
+ * Returns the file size written, or 0. */
+static inline size_t test_bios_write(const char *path)
+{
+    static const uint8_t prog[] = {
+        0xF3, 0x31, 0xF0, 0xDF,       /* di; ld sp,$dff0 */
+        0x21, 0x20, 0x00,             /* ld hl,stub */
+        0x11, 0x00, 0xC7,             /* ld de,$c700 */
+        0x01, 0x07, 0x00,             /* ld bc,7 */
+        0xED, 0xB0,                   /* ldir */
+        0xC3, 0x00, 0xC7,             /* jp $c700 */
+    };
+    static const uint8_t stub[] = {
+        0x3E, 0xAB, 0xD3, 0x3E,       /* ld a,$ab; out ($3e),a: cart on, BIOS off */
+        0xC3, 0x00, 0x00,             /* jp $0000 */
+    };
+    static uint8_t img[0x2000];
+    FILE *f;
+    size_t n = 0;
+
+    memset(img, 0, sizeof img);
+    memcpy(img, prog, sizeof prog);
+    memcpy(img + 0x20, stub, sizeof stub);
+    memcpy(img + 0x1000, "FujiNet Go SMS test BIOS", 24);
+    f = fopen(path, "wb");
+    if (f) {
+        n = fwrite(img, 1, sizeof img, f);
+        fclose(f);
+    }
+    return n;
+}
+
 #endif /* SMS_TEST_ROM_H */

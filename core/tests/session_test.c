@@ -212,6 +212,29 @@ int main(void)
     check(!smssession_cart_booted_game(s), "no game in the cartridge");
     check(smssession_cart_link_up(s) == 0, "with no runtime the cart reports link down");
 
+    /* Import BIOS, then Reset to CONFIG: the console powers up with it, and
+     * the BIOS (one this test writes) hands over to the cartridge */
+    {
+        char bios[700], msg[256];
+        smsdebug_io io;
+        snprintf(bios, sizeof bios, "%s/handover.rom", cfg);
+        check(test_bios_write(bios) > 0, "wrote a hand-over BIOS");
+        check(smssession_import_bios(s, bios, msg, sizeof msg) == smssession_bios_count(),
+              "Import BIOS takes it as a custom BIOS");
+        check(strcmp(smssession_console_bios(s, SMS_CONSOLE_SMS1), "custom") == 0,
+              "and chooses it for the Master System");
+        check(smssession_console(s) == SMS_CONSOLE_SMS1, "the Master System is running");
+        check(smssession_reset_to_config(s) == 0, "reset to CONFIG");
+        smsdebug_io_get(smssession_debugger(s), &io);
+        check(io.bios_present, "the console powered up with the imported BIOS");
+        check(wait_status(s, "link down", 5000), "which handed over to CONFIG");
+        smssession_set_console_bios(s, SMS_CONSOLE_SMS1, "");
+        check(smssession_reset_to_config(s) == 0, "None chosen, reset to CONFIG");
+        smsdebug_io_get(smssession_debugger(s), &io);
+        check(!io.bios_present, "boots the cartridge directly again");
+        check(wait_status(s, "link down", 5000), "CONFIG runs");
+    }
+
     /* a console change takes effect at the power cycle (restart reads the
      * settings, so keep the devices off there too) */
     smssession_set_int(s, "enable_fujinet", 0);

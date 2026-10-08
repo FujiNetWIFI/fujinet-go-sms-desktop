@@ -315,6 +315,14 @@ static int power_cycle(struct smssession *s, const char *cart_path)
 {
     int rc;
 
+    /* the console powers up with the BIOS and FM options its settings name
+     * now: an Import BIOS or a Preferences change takes effect here */
+    snprintf(s->bios_name, sizeof s->bios_name, "%s",
+             smssession_console_bios(s, s->opts.console));
+    s->opts.bios = s->bios_name;
+    s->opts.fm_unit = smssession_get_int(s, "fm_unit", 1);
+    s->opts.fm_unit_mutes_psg = smssession_get_int(s, "fm_unit_mutes_psg", 0);
+
     smsdebug_before_power_cycle(s);
     sms_host_stop();
     rc = host_up(s, cart_path);
@@ -527,6 +535,13 @@ int smssession_reset_to_config(smssession *s)
 int smssession_eject(smssession *s)
 {
     return smssession_reset_to_config(s);
+}
+
+int smssession_console(const smssession *s)
+{
+    if (s->running)
+        return s->opts.console;
+    return smssession_get_int((smssession *)s, "console", SMS_CONSOLE_SMS1);
 }
 
 /* ---- video / audio --------------------------------------------------------- */

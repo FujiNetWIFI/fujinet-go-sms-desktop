@@ -154,12 +154,19 @@ const char *smssession_cart_path(const smssession *s);
 /* 1 if the image can run on the FujiNet cartridge; else 0 and why. */
 int  smssession_check_cart(const char *path, char *why, int whysz);
 
+/* The console running now (while stopped: the one the settings name). The
+ * "console" setting can run ahead of it while Preferences is open. */
+int  smssession_console(const smssession *s);
+
 /* Soft Reset: the console's /RESET line (MAME's soft reset). The cartridge
  * goes back to CONFIG, or an opened cartridge restarts. F3 by default. */
 int  smssession_soft_reset(smssession *s);
 /* Reset to CONFIG: a power cycle. Ejects an opened cartridge (clears the
  * "cart" setting) and boots CONFIG, exactly as at power-on. Escape by
- * default. */
+ * default. Every power cycle (this, Eject, Open Cartridge) takes the
+ * running console's BIOS and FM options from the settings as they are now,
+ * so an imported BIOS boots here; changing the console itself takes
+ * smssession_restart. */
 int  smssession_reset_to_config(smssession *s);
 /* Eject: the same as Reset to CONFIG (there is no "no cartridge" state
  * worth having on a FujiNet cartridge). */
