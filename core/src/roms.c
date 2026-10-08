@@ -120,7 +120,7 @@ static uint32_t crc32_of(const uint8_t *p, size_t n)
 /* The whole file, if it is no bigger than `max`; NULL otherwise. */
 static uint8_t *read_file(const char *path, uint32_t max, uint32_t *size)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = path && *path ? fopen(path, "rb") : NULL;
     uint8_t *buf;
     size_t got;
 
@@ -265,7 +265,8 @@ void roms_provision_embedded(struct smssession *s)
 int smssession_media_is_bios(const char *path)
 {
     uint32_t size = 0;
-    uint8_t *buf = read_file(path, MAX_IMAGE, &size);
+    char abs[SMS_PATH_MAX];
+    uint8_t *buf = read_file(paths_resolve(path, abs, sizeof abs), MAX_IMAGE, &size);
     int known;
 
     if (!buf)
@@ -282,12 +283,14 @@ int smssession_import_bios(smssession *s, const char *path, char *msg, int msgsz
     int idx;
     const sms_bios_info *b;
     char dest[SMS_PATH_MAX];
+    char abs[SMS_PATH_MAX];
     FILE *f;
     int console = s->running ? s->opts.console
                              : smssession_get_int(s, "console", SMS_CONSOLE_SMS1);
 
     if (msg && msgsz > 0)
         msg[0] = '\0';
+    path = paths_resolve(path, abs, sizeof abs);
     buf = read_file(path, MAX_IMAGE, &size);
     if (!buf) {
         session_set_error(s, "%s is not a BIOS image: Master System BIOSes are "

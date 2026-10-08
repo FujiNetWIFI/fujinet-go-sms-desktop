@@ -85,6 +85,13 @@ void settings_free_all(struct smssession *s);
 
 int paths_init(struct smssession *s, const char *config_dir,
                const char *data_dir);
+/* The in-process FujiNet makes its runtime root the process's working
+ * directory (its PC firmware opens data/ relative to it), so a path a user
+ * gave relative to where they started the app -- a command-line argument --
+ * is resolved against the directory the first session was created in.
+ * paths_resolve returns `path` itself when it is absolute, else `buf`. */
+void paths_capture_launch_dir(void);
+const char *paths_resolve(const char *path, char *buf, size_t bufsz);
 /* Locate libfujinet and provision the runtime tree (fnconfig.ini + data/ +
  * SD/) into <data>/fujinet on first run. Returns 0, or -1 if no runtime is
  * available (not fatal to the session -- see fujinet_start). */

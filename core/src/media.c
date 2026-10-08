@@ -88,11 +88,13 @@ int smssession_import_media(smssession *s, const char *src_path,
     const char *name;
     const char *dir;
     struct stat st;
+    char abs[SMS_PATH_MAX];
 
     if (!src_path || !*src_path) {
         session_set_error(s, "No file to import");
         return -1;
     }
+    src_path = paths_resolve(src_path, abs, sizeof abs);
     name = base_name(src_path);
 
     if (smssession_media_is_bios(src_path)) {
@@ -162,12 +164,14 @@ int smssession_import_cart_to_sd(smssession *s, const char *src_path,
 {
     const char *name;
     char cfg[SMS_PATH_MAX], cfg_dst[SMS_PATH_MAX];
+    char abs[SMS_PATH_MAX];
     struct stat st;
 
     if (!src_path || !*src_path) {
         session_set_error(s, "No file to import");
         return -1;
     }
+    src_path = paths_resolve(src_path, abs, sizeof abs);
     name = base_name(src_path);
     if (!s->fujinet_sd[0] ||
         stat(s->fujinet_sd, &st) != 0 || !S_ISDIR(st.st_mode)) {

@@ -17,11 +17,15 @@
 #include <process.h>
 #define test_mkdir(p) _mkdir(p)
 #define test_getpid() _getpid()
+#define test_chdir(p) _chdir(p)
+#define test_getcwd(b, n) _getcwd(b, (int)(n))
 #else
 #include <sys/stat.h>
 #include <unistd.h>
 #define test_mkdir(p) mkdir(p, 0755)
 #define test_getpid() getpid()
+#define test_chdir(p) chdir(p)
+#define test_getcwd(b, n) getcwd(b, n)
 #endif
 
 static inline void test_tmpdir(char *dst, size_t dstsz, const char *tag)

@@ -77,7 +77,7 @@ static uint8_t ram(smssession *s, uint16_t addr)
 
 int main(void)
 {
-    char cfg[512], data[512], rom[700], big[700];
+    char cfg[512], data[512], rom[700], big[700], launch[512];
     smssession_paths p;
     smssession *s;
     smssession_start_opts o;
@@ -86,6 +86,8 @@ int main(void)
 
     test_tmpdir(cfg, sizeof cfg, "cfg");
     test_tmpdir(data, sizeof data, "data");
+    if (!test_getcwd(launch, sizeof launch))
+        return 1;
     memset(&p, 0, sizeof p);
     p.config_dir = cfg; p.data_dir = data;
     p.fujinet_lib = "";     /* no runtime: the cart runs link-down */
@@ -232,6 +234,23 @@ int main(void)
     check(smssession_restart(s) == 0, "restart onto the Japanese Master System");
     check(wait_status(s, "link down", 5000), "and so does the Japanese console");
     smssession_set_int(s, "console", SMS_CONSOLE_SMS1);
+
+    /* A path relative to where the app started still means that file after
+     * the process's working directory moves: the in-process FujiNet makes
+     * its runtime root the working directory. */
+    {
+        char rel[64], abs[1200];
+        snprintf(rel, sizeof rel, "sms-rel-%ld.sms", (long)test_getpid());
+        snprintf(abs, sizeof abs, "%s/%s", launch, rel);
+        check(test_rom_write(abs, TEST_ROM_COUNTER) > 0, "wrote an image in the launch directory");
+        check(test_chdir(data) == 0, "the working directory moves away");
+        check(smssession_check_cart(rel, NULL, 0) == 1, "a bare name still finds it");
+        check(smssession_load_cart(s, rel) == 0, "and opens it");
+        check(strcmp(smssession_cart_path(s), abs) == 0, "remembered by its full path");
+        check(wait_status(s, "game running", 3000), "and it runs");
+        test_chdir(launch);
+        remove(abs);
+    }
 
     /* a remembered cartridge boots at the next start */
     check(smssession_load_cart(s, rom) == 0, "open the cartridge again");

@@ -66,6 +66,10 @@ function(sms_session_test name)
   endif()
 endfunction()
 
+# A scripted driver: the whole app headless, presses and screenshots, for
+# exploring CONFIG and checking a flow end to end. Built, not registered.
+sms_session_test(sms_drive sms_drive.c)
+
 # The frontend contract, against a real temporary XDG tree: settings persist,
 # paths resolve, CONFIG boots and paints, input reaches the machine, a
 # cartridge opens, Soft Reset keeps it, Reset to CONFIG ejects it, an image
@@ -103,6 +107,13 @@ set_tests_properties(debug PROPERTIES TIMEOUT 120)
 sms_session_test(fujibus_smoke fujibus_smoke.c)
 add_test(NAME fujibus_smoke COMMAND fujibus_smoke)
 set_tests_properties(fujibus_smoke PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120 RUN_SERIAL ON)
+
+# CONFIG, driven like a user, boots the suite's own image from the SD host
+# through FujiNet (screens recognised by their text in the name table).
+# SKIPs (77) without the FujiNet runtime. Serial: it owns the port.
+sms_session_test(config_boot_test config_boot_test.c)
+add_test(NAME config_boot COMMAND config_boot_test)
+set_tests_properties(config_boot PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180 RUN_SERIAL ON)
 
 # A network boot end to end: the cartridge bring-up's fujiboot client mounts
 # hello.sms (put there by Import Cartridge to SD) from the SD host, FujiNet

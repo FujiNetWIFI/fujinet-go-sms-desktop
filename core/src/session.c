@@ -120,7 +120,10 @@ int sms_console_has_fm(int console)
 
 smssession *smssession_new(const smssession_paths *paths)
 {
-    struct smssession *s = calloc(1, sizeof *s);
+    struct smssession *s;
+
+    paths_capture_launch_dir();
+    s = calloc(1, sizeof *s);
     if (!s)
         return NULL;
 
@@ -343,9 +346,11 @@ static void adopt_opts(struct smssession *s, const smssession_start_opts *opts)
         s->opts.console = SMS_CONSOLE_SMS1;
     snprintf(s->bios_name, sizeof s->bios_name, "%s", opts->bios ? opts->bios : "");
     s->opts.bios = s->bios_name;
-    if (opts->cart_path)
-        snprintf(s->cart_path, sizeof s->cart_path, "%s", opts->cart_path);
-    else
+    if (opts->cart_path) {
+        char abs[SMS_PATH_MAX];
+        snprintf(s->cart_path, sizeof s->cart_path, "%s",
+                 paths_resolve(opts->cart_path, abs, sizeof abs));
+    } else
         s->cart_path[0] = '\0';
     s->opts.cart_path = s->cart_path[0] ? s->cart_path : NULL;
 }
@@ -458,12 +463,14 @@ int smssession_check_cart(const char *path, char *why, int whysz)
     uint32_t len = 0;
     char mapper[64];
     char err[256];
+    char abs[SMS_PATH_MAX];
     int ok;
 
     if (why && whysz > 0)
         why[0] = '\0';
     if (!path || !*path)
         return 0;
+    path = paths_resolve(path, abs, sizeof abs);
     img = read_cart(path, &len, err, sizeof err);
     if (!img) {
         if (why && whysz > 0)
@@ -479,9 +486,11 @@ int smssession_check_cart(const char *path, char *why, int whysz)
 int smssession_load_cart(smssession *s, const char *path)
 {
     char why[256];
+    char abs[SMS_PATH_MAX];
 
     if (!s->running || !path || !*path)
         return -1;
+    path = paths_resolve(path, abs, sizeof abs);
     if (!smssession_check_cart(path, why, sizeof why)) {
         session_set_error(s, "%s", why);
         return -1;

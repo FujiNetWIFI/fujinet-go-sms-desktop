@@ -104,6 +104,39 @@ static void default_dir(char *dst, size_t dstsz, const char *xdg_env,
 #endif
 }
 
+static char g_launch_dir[SMS_PATH_MAX];
+
+void paths_capture_launch_dir(void)
+{
+    if (g_launch_dir[0])
+        return;
+#ifdef _WIN32
+    if (!_getcwd(g_launch_dir, (int)sizeof g_launch_dir))
+#else
+    if (!getcwd(g_launch_dir, sizeof g_launch_dir))
+#endif
+        g_launch_dir[0] = '\0';
+}
+
+static int is_absolute(const char *p)
+{
+#ifdef _WIN32
+    if (p[0] == '\\' || p[0] == '/')
+        return 1;
+    return ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':';
+#else
+    return p[0] == '/';
+#endif
+}
+
+const char *paths_resolve(const char *path, char *buf, size_t bufsz)
+{
+    if (!path || !*path || is_absolute(path) || !g_launch_dir[0])
+        return path;
+    snprintf(buf, bufsz, "%s/%s", g_launch_dir, path);
+    return buf;
+}
+
 int paths_init(struct smssession *s, const char *config_dir,
                const char *data_dir)
 {
