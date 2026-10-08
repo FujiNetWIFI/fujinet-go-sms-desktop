@@ -11,7 +11,8 @@ M0  scaffold                                                          [x]
   [x] root CMakeLists (VERSION 0.1.0, FRONTEND switch, WITH_SMS_ROMS OFF,
       no_embedded_roms registration, icon loop, CPack DEB/RPM/TGZ),
       .gitignore, LICENSE, tools/fujinet, mingw toolchain
-  [x] cmake/Dependencies.cmake pins fujinet-firmware add-sms (296ba263);
+  [x] cmake/Dependencies.cmake pins fujinet-firmware add-sms (b96613f, the
+      Phantasy Star-style CONFIG; was 296ba263);
       FUJINET_SRC override; cmake/StageFujiProto.cmake stages pico/sms
   [x] tools/fujinet: BoIP 11508, web UI 11509; patch 0002 adds .sms/.sg to
       the RS232 ROM media type so CONFIG's MOUNT_IMAGE pushes them
@@ -113,8 +114,7 @@ M11 family audit                                                      [x]
 
 Not yet done (needs hardware or a person):
   - run the Windows and macOS builds on a real desktop
-  - cut v0.1.0 (set the release date in both metainfo templates, tag) --
-    only when asked
+  - (v0.1.0: tagged 2026-10-08, with the Phantasy Star-style CONFIG)
 
 Verification beyond ctest (local):
   [x] tools/ab/audio_ab.py: FM (smsj, Mark III FM unit) and PSG (NTSC, PAL)
