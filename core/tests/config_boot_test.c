@@ -25,6 +25,7 @@
 #include "smsdebug.h"
 #include "test_tmpdir.h"
 #include "test_rom.h"
+#include "test_crash.h"
 
 static int failures;
 static void check(int ok, const char *what)
@@ -130,6 +131,7 @@ int main(void)
     smsdebug *d;
     uint32_t crc;
 
+    test_crash_install();
     test_tmpdir(cfg, sizeof cfg, "cbcfg");
     test_tmpdir(data, sizeof data, "cbdata");
     snprintf(rom, sizeof rom, "%s/counter.sms", cfg);
@@ -189,12 +191,16 @@ int main(void)
         check(ram(d, 0xC010) != a, "the image is running (its counter moves)");
     }
 
+    test_crash_phase("resetting to CONFIG");
     check(smssession_reset_to_config(s) == 0, "reset to CONFIG");
     check(wait_screen(d, "SELECT A HOST", 30000), "CONFIG's host list is back");
     check(!smssession_cart_booted_game(s), "and nothing booted");
 
+    test_crash_phase("stopping the session");
     smssession_stop(s);
+    test_crash_phase("freeing the session");
     smssession_free(s);
+    test_crash_phase("returning from main");
     printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }
