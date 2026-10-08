@@ -1,0 +1,53 @@
+fujinet-go-sms-desktop -- milestone log
+======================================
+
+The plan is the family's (see fujinet-go-adam-desktop/PORTING.md): one C API
+in core/, four native frontends, FujiNet in-process, one shared settings
+store, a native debugger everywhere, no panels visible at startup,
+clone-and-build CI. The core is MAME's Master System transposed to C, the
+astrocade sibling's way. Nothing below is marked done on "it compiles".
+
+M0  scaffold                                                          [x]
+  [x] root CMakeLists (VERSION 0.1.0, FRONTEND switch, WITH_SMS_ROMS OFF,
+      no_embedded_roms registration, icon loop, CPack DEB/RPM/TGZ),
+      .gitignore, LICENSE, tools/fujinet, mingw toolchain
+  [x] cmake/Dependencies.cmake pins fujinet-firmware add-sms (296ba263);
+      FUJINET_SRC override; cmake/StageFujiProto.cmake stages pico/sms
+  [x] tools/fujinet: BoIP 11508, web UI 11509; patch 0002 adds .sms/.sg to
+      the RS232 ROM media type so CONFIG's MOUNT_IMAGE pushes them
+  [x] vendored: z80.h/z80dasm.h (floooh, zlib), ymfm (MAME 3rdparty, BSD-3)
+  [x] icons: the family mark in white on #E4002B over the cartridge-label
+      grid (tools/icons/make-icons.py)
+
+M1  emulator core (core/sms/), headless                               [x]
+  [x] machine.c: the six models (sms1, sms1pal, sms, smspal, smsj,
+      sg1000m3), memory map, BIOS paging, $3E/$3F, the Japanese and Mark III
+      I/O maps, the smsj's C-Sync counter and Rapid button, the FM unit
+  [x] vdp.c: 315-5124/5246, MAME's timers as a per-line event engine run
+      against the CPU's cycle count; modes 0-4, sprites, flags, palettes
+  [x] psg.c (SEGAPSG), fm_ym2413.cpp (ymfm), mix to 48 kHz stereo float
+  [x] host.c: thread, NTSC/PAL pacing, vsync phase lock, frame slot, audio
+  [x] calibrated against MAME with probe ROMs (tools/ab/probes): the beam's
+      rounding (BEAM_ROUND_MCLK 0) and the IRQ look-ahead (IRQ_AHEAD 1);
+      V/H counters at every line phase and every interrupt entry match
+  [x] tools/ab/mame_ab.py: CONFIG, the probes and 76 games from the local
+      corpus pixel-identical to MAME over 2400 frames of scripted play;
+      sms, smspal, sms1pal, sg1000m3 too; real BIOS boots (bios13,
+      alexkidd, jbios21 + the YM2413 patch ROM) identical
+
+M2  FujiNet cartridge device                                          [~]
+  [x] fujinet_cart.c: line-for-line transposition of emu/fujinet.cpp with
+      real /M1 and the bus snoop; FN_R_LINK published as the firmware does
+  [x] mailbox worker thread (the cart's core0), publish shadow, sync mode
+  [x] fujitcp_host.c: portable transport with abort and EOF handling
+  [ ] cart_seam, bios_synth, fujibus_smoke, netboot (sync + async)
+
+M3  session layer                                                     [ ]
+M4  debugger engine                                                   [ ]
+M5  GNOME frontend                                                    [ ]
+M6  KDE frontend                                                      [ ]
+M7  Windows frontend                                                  [ ]
+M8  macOS frontend                                                    [ ]
+M9  packaging                                                         [ ]
+M10 CI/CD                                                             [ ]
+M11 family audit                                                      [ ]

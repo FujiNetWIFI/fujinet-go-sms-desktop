@@ -1,0 +1,27 @@
+The FujiNet SMS cartridge boots .sms images (and .sg SG-1000 / Mark III
+images): CONFIG mounts one and the ESP32 (here, the RS232 PC runtime) must
+push it to the cartridge over the DBC stream like any other cartridge ROM.
+discover_mediatype() at the add-sms pin only knows ROM, BIN, INT, ITV and
+CHF, so a .sms file mounts as a plain disk image and the cartridge waits
+forever for BOOT_READY. Add SMS (upstream as fujinet-firmware 302d4950d on
+fujiversal-sms-board) and SG (not yet upstream); carried here until the pin
+(cmake/Dependencies.cmake) moves to a commit that has both.
+
+--- a/lib/media/rs232/diskType.cpp
++++ b/lib/media/rs232/diskType.cpp
+@@ -79,10 +79,13 @@
+         // replaces the previous disksize==8192||16384||32768 heuristic
+         // (rs232Disk::mount()), which misfired on any file of those exact
+         // sizes regardless of extension and missed every other ROM size.
+-        // CHF is the Channel F cartridge extension MAME accepts alongside .bin.
++        // CHF is the Channel F cartridge extension MAME accepts alongside .bin;
++        // SMS is a Sega Master System image and SG an SG-1000 / Mark III one,
++        // whose mapper the cartridge picks.
+         if (strcasecmp(ext, "ROM") == 0 || strcasecmp(ext, "BIN") == 0 ||
+             strcasecmp(ext, "INT") == 0 || strcasecmp(ext, "ITV") == 0 ||
+-            strcasecmp(ext, "CHF") == 0)
++            strcasecmp(ext, "CHF") == 0 || strcasecmp(ext, "SMS") == 0 ||
++            strcasecmp(ext, "SG") == 0)
+         {
+             return MEDIATYPE_ROM;
+         }
