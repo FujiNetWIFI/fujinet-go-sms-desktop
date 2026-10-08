@@ -231,7 +231,7 @@ uint8_t sms_vdp_data_read(sms_vdp_t *v, bool commit);
 void sms_vdp_data_write(sms_vdp_t *v, uint8_t data);
 uint8_t sms_vdp_control_read(sms_vdp_t *v, uint64_t cycle, bool commit);
 void sms_vdp_control_write(sms_vdp_t *v, uint8_t data, uint64_t cycle);
-uint8_t sms_vdp_vcount_read(sms_vdp_t *v, uint64_t cycle);
+uint8_t sms_vdp_vcount_read(const sms_vdp_t *v, uint64_t cycle);
 uint8_t sms_vdp_hcount_read(sms_vdp_t *v);
 void sms_vdp_hcount_latch(sms_vdp_t *v, uint64_t cycle);
 
@@ -366,6 +366,8 @@ void sms_machine_soft_reset(sms_machine_t *m);
 void sms_machine_run_frame(sms_machine_t *m);
 /* Run one instruction (debugger). */
 void sms_machine_step_instruction(sms_machine_t *m);
+/* One T-state with no debugger hooks (the debugger's own PC change). */
+void sms_machine_tick_quiet(sms_machine_t *m);
 /* Latch the live inputs (the frame boundary). */
 void sms_machine_latch_inputs(sms_machine_t *m);
 /* Debugger access: peek never disturbs the machine (cart hotspots do not

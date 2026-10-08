@@ -210,6 +210,11 @@ void sms_host_cart_status(sms_cart_status_t *out)
     sms_cart_status(atomic_load(&s_running) ? s_cart : NULL, out);
 }
 
+sms_cart_t *sms_host_cart(void)
+{
+    return atomic_load(&s_running) ? s_cart : NULL;
+}
+
 /* ---- debugger plumbing ---- */
 
 sms_machine_t *sms_host_machine(void)

@@ -88,6 +88,9 @@ void sms_host_release_all(void);
 
 /* ---- the cartridge ---- */
 void sms_host_cart_status(sms_cart_status_t *out);
+/* The cart device, or NULL when not running (the debugger's page banks,
+ * SRAM and arena dumps). */
+sms_cart_t *sms_host_cart(void);
 
 /* ---- debugger plumbing ----
  * The live machine; valid only while running, and only safe to inspect

@@ -269,7 +269,7 @@ static uint8_t vcount(const sms_vdp_t *v, uint64_t cycle)
     return (uint8_t)((vpos - active_scr_start) & 0xff);
 }
 
-uint8_t sms_vdp_vcount_read(sms_vdp_t *v, uint64_t cycle)
+uint8_t sms_vdp_vcount_read(const sms_vdp_t *v, uint64_t cycle)
 {
     return vcount(v, cycle);
 }

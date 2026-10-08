@@ -685,7 +685,8 @@ static void tick(sms_machine_t *m)
         {
             const uint8_t d = mem_read(m, addr, (pins & Z80_M1) != 0, true);
             Z80_SET_DATA(pins, d);
-            if (m->watch & SMS_WATCH_MEMR)
+            /* an opcode fetch is execution, not a data read */
+            if ((m->watch & SMS_WATCH_MEMR) && !(pins & Z80_M1))
                 m->bus_hook(m, m->bus_hook_user, SMS_BUS_MEMR, addr, d);
         }
         else if (pins & Z80_WR)
@@ -735,6 +736,18 @@ static void tick(sms_machine_t *m)
 
     if (z80_opdone(&m->cpu) && m->instr_hook)
         m->instr_hook(m, m->instr_hook_user);
+}
+
+void sms_machine_tick_quiet(sms_machine_t *m)
+{
+    void (*instr)(sms_machine_t *, void *) = m->instr_hook;
+    const uint8_t watch = m->watch;
+
+    m->instr_hook = NULL;
+    m->watch = 0;
+    tick(m);
+    m->instr_hook = instr;
+    m->watch = watch;
 }
 
 void sms_machine_run_frame(sms_machine_t *m)
