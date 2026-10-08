@@ -34,11 +34,11 @@
 
 find_package(Git QUIET)
 
-# fujinet-firmware, branch add-sms (296ba2634): the Sega Master System
-# cartridge (pico/sms) with the receive buffer sized for a full SLIP-escaped
-# 1K reply. Recorded in three places -- here and in both flatpak manifests
+# fujinet-firmware, branch add-sms (b96613f36): the Sega Master System
+# cartridge (pico/sms) with the Phantasy Star-style CONFIG baked in.
+# Recorded in three places -- here and in both flatpak manifests
 # (build-aux/flatpak/*.yml).
-set(FUJINET_COMMIT "296ba26343805b9c9641831e6be54717b9c23a43")
+set(FUJINET_COMMIT "b96613f36de0f0f448c0be47b0069266f551766d")
 set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
 
 # sms_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>
