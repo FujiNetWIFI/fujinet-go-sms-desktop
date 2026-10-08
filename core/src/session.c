@@ -137,8 +137,10 @@ smssession *smssession_new(const smssession_paths *paths)
     bindings_init(s);
     roms_provision_embedded(s);
 
-    if (paths && paths->fujinet_lib)
+    if (paths && paths->fujinet_lib) {
         snprintf(s->fujinet_lib, sizeof s->fujinet_lib, "%s", paths->fujinet_lib);
+        s->fujinet_disabled = !paths->fujinet_lib[0];
+    }
     if (paths && paths->fujinet_runtime_src)
         snprintf(s->fujinet_runtime_src, sizeof s->fujinet_runtime_src, "%s",
                  paths->fujinet_runtime_src);
@@ -369,7 +371,7 @@ int smssession_start(smssession *s, const smssession_start_opts *opts)
      * has to exist before the machine's first transaction or the CONFIG
      * client boots reporting no link. Failing to start is NOT fatal (the
      * cartridge also redials when a transaction finds the link down). */
-    if (s->opts.enable_fujinet) {
+    if (s->opts.enable_fujinet && !s->fujinet_disabled) {
         if (fujinet_start(s) == 0)
             fujinet_wait_for_boip(s, 3000);
     }

@@ -12,8 +12,11 @@
  * mailbox on its worker thread (the default) and inline (SMS_CART_SYNC=1).
  *
  * Needs fujiboot.sms and hello.sms built with BOOT_PATH=/hello.sms by
- * fujinet-firmware's pico/sms/build.sh: SMS_TESTROM_DIR=/path/to/build.
- * SKIPs (77) without them or without the FujiNet runtime.
+ * fujinet-firmware's pico/sms/build.sh: SMS_TESTROM_DIR=/path/to/build
+ * (the pinned checkout's: BOOT_PATH=/hello.sms
+ * tools/fujinet/work/fujinet-firmware/pico/sms/build.sh). With fujibank.sms
+ * there too, also opens that banked app. SKIPs (77) without them, with a
+ * fujiboot built for another path, or without the FujiNet runtime.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -69,6 +72,15 @@ static uint8_t *slurp(const char *p, long *n)
     return b;
 }
 
+static long slurp_size(const char *p)
+{
+    long n = 0;
+    uint8_t *b = slurp(p, &n);
+    if (!b) return -1;
+    free(b);
+    return n;
+}
+
 static uint32_t crc32_of(const uint8_t *p, long n)
 {
     uint32_t c = 0xFFFFFFFFu;
@@ -83,7 +95,7 @@ static uint32_t crc32_of(const uint8_t *p, long n)
 int main(void)
 {
     const char *dir = getenv("SMS_TESTROM_DIR");
-    char cfg[512], data[512], boot[1024], hello[1024], dest[1200];
+    char cfg[512], data[512], boot[1024], hello[1024], bank[1024], dest[1200];
     smssession_paths p;
     smssession *s;
     smssession_start_opts o;
@@ -106,13 +118,21 @@ int main(void)
     hello_crc = crc32_of(img, n);
     free(img);
     {
-        long bn = 0;
+        long bn = 0, i;
+        int found = 0;
         uint8_t *b = slurp(boot, &bn);
         if (!b) {
             printf("SKIP: no fujiboot.sms in %s\n", dir);
             return 77;
         }
+        /* fujiboot mounts the BOOT_PATH it was built with */
+        for (i = 0; i + 11 <= bn && !found; i++)
+            found = memcmp(b + i, "/hello.sms", 11) == 0;
         free(b);
+        if (!found) {
+            printf("SKIP: %s was not built with BOOT_PATH=/hello.sms\n", boot);
+            return 77;
+        }
     }
 
     test_tmpdir(cfg, sizeof cfg, "ncfg");
@@ -178,6 +198,25 @@ int main(void)
     check(smssession_reset_to_config(s) == 0, "reset to CONFIG");
     check(wait_status(s, "connected", 10000), "CONFIG is back, link up");
     check(!smssession_cart_booted_game(s), "and nothing booted");
+
+    /* a claimed client larger than 32K: opened, it runs from the SRAM on
+     * the Sega mapper with the mailbox live, and reaches FujiNet */
+    snprintf(bank, sizeof bank, "%s/fujibank.sms", dir);
+    if (slurp_size(bank) > 0x8000) {
+        smsdebug *d = smssession_debugger(s);
+        smsdebug_cart c;
+        int waited = 0;
+        check(smssession_load_cart(s, bank) == 0, "fujibank (a banked app) opened");
+        do {
+            smsdebug_cart_get(d, &c);
+            if (!c.present) { sleep_ms(20); waited += 20; }
+        } while (!c.present && waited < 3000);
+        printf("  fujibank: mode %d, mapper %s, claim %d, %u bytes\n", c.mode, c.mapper_name,
+               c.claim, c.image_size);
+        check(c.mode == 2 && c.claim && c.image_size > 0x8000, "it runs as an APP, mailbox live");
+        check(wait_status(s, "connected", 10000), "and its link comes up");
+        check(smssession_reset_to_config(s) == 0, "reset to CONFIG");
+    }
 
     smssession_stop(s);
     smssession_free(s);

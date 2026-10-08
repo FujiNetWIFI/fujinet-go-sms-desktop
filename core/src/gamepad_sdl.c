@@ -32,6 +32,7 @@
 
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +72,7 @@ typedef struct {
     pthread_t thread;
     pthread_mutex_t lock;
     int running;
-    volatile int stop_requested;
+    atomic_int stop_requested;
     pad_slot pads[MAX_PADS];
     int npads;
     unsigned generation;
@@ -472,7 +473,7 @@ static void *thread_main(void *arg)
         SDL_free(ids);
     }
 
-    while (!g->stop_requested) {
+    while (!atomic_load(&g->stop_requested)) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
@@ -559,7 +560,7 @@ void gamepad_stop(struct smssession *s)
 {
     gamepad_state *g = s->gamepad;
     if (!g) return;
-    g->stop_requested = 1;
+    atomic_store(&g->stop_requested, 1);
     pthread_join(g->thread, NULL);
     pthread_mutex_destroy(&g->lock);
     s->gamepad = NULL;

@@ -105,7 +105,11 @@ size_t g_log_file_size = 0;
 int g_log_read_fd = -1;
 int g_log_write_fd = -1;
 int g_saved_stdout_fd = -1;
-int g_saved_stderr_fd = -1;
+int g_saved_stderr_fd = -1;   /* guarded by g_host_log_mutex */
+/* host_log's fd: any thread logs, and stop_log_capture retires the saved
+ * stderr only once no write can be using it (a closed fd number can be
+ * reused by the time a racing write lands). */
+std::mutex g_host_log_mutex;
 
 constexpr int kSamSampleRate = 22050;
 constexpr size_t kMaxQueuedSamSamples = static_cast<size_t>(kSamSampleRate * 60);
@@ -121,6 +125,7 @@ void host_log(const char* fmt, ...) {
     vsnprintf(line, sizeof(line) - 2, fmt, ap);
     va_end(ap);
     strcat(line, "\n");
+    std::lock_guard<std::mutex> lock(g_host_log_mutex);
     const int fd = g_saved_stderr_fd >= 0 ? g_saved_stderr_fd : STDERR_FILENO;
     ssize_t ignored = write(fd, line, strlen(line));
     (void)ignored;
@@ -296,23 +301,26 @@ void stop_log_capture() {
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
         saved_stdout_fd = g_saved_stdout_fd;
-        saved_stderr_fd = g_saved_stderr_fd;
         log_read_fd = g_log_read_fd;
         log_write_fd = g_log_write_fd;
         g_saved_stdout_fd = -1;
-        g_saved_stderr_fd = -1;
         g_log_read_fd = -1;
         g_log_write_fd = -1;
         log_thread = std::move(g_log_thread);
     }
+    {
+        std::lock_guard<std::mutex> lock(g_host_log_mutex);
+        saved_stderr_fd = g_saved_stderr_fd;
+    }
 
+    /* the real stdout/stderr back first, then EOF to the log thread, which
+     * drains what is left (logging through the saved stderr) and ends */
     if (saved_stdout_fd >= 0) {
         dup2(saved_stdout_fd, STDOUT_FILENO);
         close(saved_stdout_fd);
     }
     if (saved_stderr_fd >= 0) {
         dup2(saved_stderr_fd, STDERR_FILENO);
-        close(saved_stderr_fd);
     }
     if (log_write_fd >= 0) {
         close(log_write_fd);
@@ -323,6 +331,11 @@ void stop_log_capture() {
     }
     if (log_read_fd >= 0) {
         close(log_read_fd);
+    }
+    if (saved_stderr_fd >= 0) {
+        std::lock_guard<std::mutex> lock(g_host_log_mutex);
+        g_saved_stderr_fd = -1;
+        close(saved_stderr_fd);
     }
 
     std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -360,7 +373,10 @@ void start_log_capture(const std::string& runtime_root) {
         g_log_read_fd = log_pipe[0];
         g_log_write_fd = log_pipe[1];
         g_saved_stdout_fd = saved_stdout_fd;
-        g_saved_stderr_fd = saved_stderr_fd;
+        {
+            std::lock_guard<std::mutex> fd_lock(g_host_log_mutex);
+            g_saved_stderr_fd = saved_stderr_fd;
+        }
         g_log_tail.clear();
         g_log_file_size = 0;
         g_log_file_path = runtime_root + "/fujinet-console.log";

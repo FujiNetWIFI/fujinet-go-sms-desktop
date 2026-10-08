@@ -15,6 +15,7 @@
 #include "host.h"
 
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,9 @@ static pthread_t s_thread;
 static atomic_bool s_running = false;
 static atomic_bool s_stop_req = false;
 static atomic_bool s_reset_req = false;
+/* The machine thread powers the cart on; until it has, nobody else looks
+ * at the cart (a status read would race the power-on). */
+static atomic_bool s_cart_up = false;
 static char s_error[256];
 
 static uint8_t *s_cart_image = NULL;
@@ -43,8 +47,64 @@ static atomic_uint_fast64_t s_frames = 0;
 static double s_frame_hz = 0.0;
 
 /* inputs, written by any thread, latched by the machine at VBLANK */
-static volatile uint8_t s_pad[2];
-static volatile bool s_pause, s_reset_btn;
+static atomic_uchar s_pad[2];
+static atomic_bool s_pause, s_reset_btn;
+
+/* ---- the run lock -----------------------------------------------------------
+ * The machine thread holds it while it runs a frame and lets go of it between
+ * frames (and while the debugger has the machine parked). Every other thread
+ * that looks at or edits the machine or the cartridge holds it too
+ * (sms_host_lock), so a debugger window refreshing while the machine runs,
+ * the status dot and a breakpoint edit never race the emulation. A UI thread
+ * waits at most for the rest of one frame's emulation, a couple of
+ * milliseconds. Re-entrant per thread, and a no-op on the machine thread,
+ * which already holds it. */
+static pthread_mutex_t s_run_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int s_lock_waiters;
+static _Thread_local int t_lock_depth;
+
+void sms_host_lock(void)
+{
+    if (t_lock_depth++ == 0)
+    {
+        atomic_fetch_add(&s_lock_waiters, 1);
+        pthread_mutex_lock(&s_run_lock);
+        atomic_fetch_sub(&s_lock_waiters, 1);
+    }
+}
+
+void sms_host_unlock(void)
+{
+    if (t_lock_depth > 0 && --t_lock_depth == 0)
+        pthread_mutex_unlock(&s_run_lock);
+}
+
+void sms_host_park_release(void)
+{
+    pthread_mutex_unlock(&s_run_lock);
+}
+
+void sms_host_park_reacquire(void)
+{
+    pthread_mutex_lock(&s_run_lock);
+}
+
+/* The machine thread, between frames: let a waiting UI thread in first
+ * (a mutex is not fair, and a machine running behind would relock at once). */
+static void run_lock_take(void)
+{
+    for (int i = 0; i < 2000 && atomic_load(&s_lock_waiters) > 0; i++)
+    {
+        if (i < 50)
+            sched_yield();
+        else
+        {
+            struct timespec ts = { 0, 50000L };
+            nanosleep(&ts, NULL);
+        }
+    }
+    pthread_mutex_lock(&s_run_lock);
+}
 
 /* ---- frame slot ---- */
 
@@ -181,20 +241,27 @@ void sms_host_pad_set(int port, uint8_t mask)
 {
     if (port < 0 || port > 1)
         return;
-    s_pad[port] = mask & 0x3f;
-    s_machine.pad_live[port] = mask & 0x3f;
+    atomic_store(&s_pad[port], (uint8_t)(mask & 0x3f));
 }
 
 void sms_host_pause_set(bool down)
 {
-    s_pause = down;
-    s_machine.pause_live = down;
+    atomic_store(&s_pause, down);
 }
 
 void sms_host_reset_button_set(bool down)
 {
-    s_reset_btn = down;
-    s_machine.reset_live = down;
+    atomic_store(&s_reset_btn, down);
+}
+
+/* The machine thread, at the frame boundary: what the threads above set is
+ * what the console's ports see from here on. */
+static void inputs_take(sms_machine_t *m)
+{
+    m->pad_live[0] = atomic_load(&s_pad[0]);
+    m->pad_live[1] = atomic_load(&s_pad[1]);
+    m->pause_live = atomic_load(&s_pause);
+    m->reset_live = atomic_load(&s_reset_btn);
 }
 
 void sms_host_release_all(void)
@@ -207,12 +274,14 @@ void sms_host_release_all(void)
 
 void sms_host_cart_status(sms_cart_status_t *out)
 {
-    sms_cart_status(atomic_load(&s_running) ? s_cart : NULL, out);
+    sms_host_lock();
+    sms_cart_status(atomic_load(&s_cart_up) ? s_cart : NULL, out);
+    sms_host_unlock();
 }
 
 sms_cart_t *sms_host_cart(void)
 {
-    return atomic_load(&s_running) ? s_cart : NULL;
+    return atomic_load(&s_cart_up) ? s_cart : NULL;
 }
 
 /* ---- debugger plumbing ---- */
@@ -224,17 +293,21 @@ sms_machine_t *sms_host_machine(void)
 
 void sms_host_set_instr_hook(void (*hook)(sms_machine_t *m, void *user), void *user)
 {
+    sms_host_lock();
     s_machine.instr_hook_user = user;
     s_machine.instr_hook = hook;
+    sms_host_unlock();
 }
 
 void sms_host_set_bus_hook(void (*hook)(sms_machine_t *m, void *user, int kind,
                                         uint16_t addr, uint8_t data),
                            void *user, uint8_t watch)
 {
+    sms_host_lock();
     s_machine.bus_hook_user = user;
     s_machine.bus_hook = hook;
     s_machine.watch = hook ? watch : 0;
+    sms_host_unlock();
 }
 
 /* ---- vsync phase lock ----------------------------------------------------
@@ -367,6 +440,11 @@ static void *machine_thread(void *arg)
 
     (void)arg;
 
+    /* the machine thread holds the run lock whenever it runs the machine;
+     * its own nested sms_host_lock calls (the debugger's hooks) are no-ops */
+    t_lock_depth = 1;
+    pthread_mutex_lock(&s_run_lock);
+
     /* Bring the cartridge up here rather than on the caller's thread: the
      * TCP connect to the BoIP listener is quick but not free, and a failed
      * link must not stall the UI -- the mailbox runs link-down and CONFIG
@@ -382,6 +460,7 @@ static void *machine_thread(void *arg)
         sms_cart_power_on(s_cart, NULL, 0, NULL, s_have_boip ? s_boip : NULL,
                           s_cart_sync, why, sizeof why);
     }
+    atomic_store(&s_cart_up, true);
 
     clock_gettime(CLOCK_MONOTONIC, &next);
 
@@ -401,7 +480,11 @@ static void *machine_thread(void *arg)
         s_machine.mix.out_frames = 0;
         atomic_fetch_add(&s_frames, 1);
         /* MAME's input ports update at the frame boundary */
+        inputs_take(&s_machine);
         sms_machine_latch_inputs(&s_machine);
+
+        /* between frames the machine is anyone's who asks */
+        pthread_mutex_unlock(&s_run_lock);
 
         if (vsync_usable(frame_ns) && wait_vsync(&vs_seen, vs_timeout_ns))
         {
@@ -413,6 +496,7 @@ static void *machine_thread(void *arg)
             {
                 locked = 1;
                 next = now;
+                run_lock_take();
                 continue;
             }
             next = frame_start;
@@ -434,7 +518,9 @@ static void *machine_thread(void *arg)
             else if (behind < 0)
                 sleep_until(&next, &now);
         }
+        run_lock_take();
     }
+    pthread_mutex_unlock(&s_run_lock);
     return NULL;
 }
 
@@ -523,10 +609,7 @@ int sms_host_start(const sms_host_opts_t *opts)
 
     sms_machine_init(&s_machine, opts->model, opts->bios, opts->bios_size, opts->instruments,
                      opts->fm_unit, opts->fm_unit_mutes_psg, s_cart);
-    s_machine.pad_live[0] = s_pad[0];
-    s_machine.pad_live[1] = s_pad[1];
-    s_machine.pause_live = s_pause;
-    s_machine.reset_live = s_reset_btn;
+    inputs_take(&s_machine);
     sms_host_audio_reset();
     atomic_store(&s_frames, 0);
 
@@ -551,6 +634,7 @@ void sms_host_stop(void)
     sms_host_notify_vsync(0);
     pthread_join(s_thread, NULL);
     atomic_store(&s_running, false);
+    atomic_store(&s_cart_up, false);
     sms_cart_power_off(s_cart);
     sms_machine_free(&s_machine);
     free(s_cart_image);

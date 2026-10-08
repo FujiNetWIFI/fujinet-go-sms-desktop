@@ -89,13 +89,25 @@ void sms_host_release_all(void);
 /* ---- the cartridge ---- */
 void sms_host_cart_status(sms_cart_status_t *out);
 /* The cart device, or NULL when not running (the debugger's page banks,
- * SRAM and arena dumps). */
+ * SRAM and arena dumps). Use it under sms_host_lock. */
 sms_cart_t *sms_host_cart(void);
 
+/* ---- the run lock ----
+ * Held by the machine thread while it runs a frame. Any other thread that
+ * reads or edits the machine or the cart (sms_host_machine, sms_host_cart)
+ * holds it around the access: it waits for the frame in progress, at most a
+ * couple of milliseconds. Re-entrant per thread; a no-op on the machine
+ * thread. Never call sms_host_stop while holding it. */
+void sms_host_lock(void);
+void sms_host_unlock(void);
+/* The debugger's park: the machine thread lets go of the run lock while it
+ * is parked inside the instruction hook, and takes it back to run on. */
+void sms_host_park_release(void);
+void sms_host_park_reacquire(void);
+
 /* ---- debugger plumbing ----
- * The live machine; valid only while running, and only safe to inspect
- * while the debugger holds the machine paused inside the instruction hook
- * (core/debugger/debugger.c owns that discipline). */
+ * The live machine; valid only while running, and only touched under
+ * sms_host_lock (or on the machine thread). */
 sms_machine_t *sms_host_machine(void);
 
 /* Instruction-boundary hook (machine thread; may block). */

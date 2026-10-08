@@ -46,6 +46,7 @@ struct smssession {
     char fujinet_sd[SMS_PATH_MAX];      /* .../SD */
     char fujinet_data[SMS_PATH_MAX];    /* .../data */
     char fujinet_lib[SMS_PATH_MAX];     /* resolved libfujinet path, "" until then */
+    int  fujinet_disabled;              /* the caller passed fujinet_lib "" */
     char fujinet_runtime_src[SMS_PATH_MAX]; /* caller-given pristine tree, or "" */
     char webui_url[64];                 /* http://127.0.0.1:11509/ */
     int  fujinet_running;

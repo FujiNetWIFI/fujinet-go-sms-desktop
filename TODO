@@ -35,15 +35,41 @@ M1  emulator core (core/sms/), headless                               [x]
       sms, smspal, sms1pal, sg1000m3 too; real BIOS boots (bios13,
       alexkidd, jbios21 + the YM2413 patch ROM) identical
 
-M2  FujiNet cartridge device                                          [~]
+M2  FujiNet cartridge device                                          [x]
   [x] fujinet_cart.c: line-for-line transposition of emu/fujinet.cpp with
       real /M1 and the bus snoop; FN_R_LINK published as the firmware does
   [x] mailbox worker thread (the cart's core0), publish shadow, sync mode
   [x] fujitcp_host.c: portable transport with abort and EOF handling
-  [ ] cart_seam, bios_synth, fujibus_smoke, netboot (sync + async)
+  [x] tests: cart_seam (Sega and Codemasters routing, GAME vs APP, the GO
+      flip only on a committed /M1 fetch of $0000, re-plan on /RESET, inert
+      peeks, the $DFFC-$DFFF RAM copy), bios_synth (an in-test BIOS: the
+      hand-over, the snoop, ANDed reads, 128K paging vs the smsj's, $3E's
+      I/O-chip and work-RAM bits), fujibus_smoke, netboot with the mailbox
+      on its worker and inline (fujiboot -> hello.sms through the SD host,
+      then the 80K fujibank app opened directly)
+  [x] ThreadSanitizer: clean over session, debug, gamepad, media,
+      boot_smoke, fujibus_smoke and both netboots (build-tsan, local)
 
-M3  session layer                                                     [ ]
-M4  debugger engine                                                   [ ]
+M3  session layer                                                     [x]
+  [x] smssession.h: lifecycle, open/eject/soft reset/reset to CONFIG, the
+      remembered cartridge, .cfg mapper overrides, Import Cartridge to SD
+      (with the .cfg), import routing, Import BIOS by size + CRC with the
+      custom-BIOS warning, per-console BIOS choice, the YM2413 patch ROM,
+      bindings, gamepads, the FujiNet runtime, status
+  [x] the host's run lock: every UI-thread look at the machine or the cart
+      waits for the frame in progress instead of racing it; inputs are
+      atomics latched at VBLANK
+  [x] tests: session, media, bindings, gamepad, boot_smoke (CONFIG paints;
+      59.92 / 49.70 Hz measured)
+
+M4  debugger engine                                                   [x]
+  [x] smsdebug.h: attach/stop/resume, step/over/out/run-to/scanline/frame,
+      exec/read/write/in/out breakpoints with conditions, registers incl.
+      shadows, memory/VRAM/CRAM, VDP decode and the four views, PSG/FM/I/O,
+      the cartridge tab, built-in + WLA-DX/z88dk/SDCC/plain symbols (banked),
+      trace ring, Save, the prompt with completion
+  [x] tests: debug, dasm, vdp_decode, vdp_timing (MAME goldens)
+
 M5  GNOME frontend                                                    [ ]
 M6  KDE frontend                                                      [ ]
 M7  Windows frontend                                                  [ ]

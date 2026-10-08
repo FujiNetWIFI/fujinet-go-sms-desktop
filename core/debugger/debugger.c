@@ -15,12 +15,14 @@
  * save) is the NES sibling's.
  *
  * Threading. Everything public is called from UI threads; the hooks run on
- * the emulation thread. While stopped, the emulation thread is parked and
- * the machine is quiescent, so state reads and edits from the UI thread are
- * safe. The one edit that must happen on the emulation thread is a PC
- * change: the opcode at the old PC has already been fetched, so the parked
- * thread redirects the CPU and runs the new fetch itself before it parks
- * again.
+ * the emulation thread. Every public call that reads or edits the machine
+ * holds the host's run lock (sms_host_lock), which the emulation thread
+ * holds while it runs a frame and lets go of between frames and while it is
+ * parked here -- so a window refreshing live values while the machine runs
+ * waits a moment instead of tearing, and a stopped machine is simply the
+ * UI's. Lock order: the run lock, then d->lock (the hooks run with the run
+ * lock held and take d->lock). A PC change runs the new opcode fetch on the
+ * caller's thread, under the run lock, as the parked thread would have.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -58,7 +60,6 @@ struct smsdebug {
     uint16_t target, sp_guard;
     int last_vpos;
     uint64_t target_frame;
-    atomic_int pc_req;           /* -1, or a PC the parked thread must take */
     int was_attached;            /* across a power cycle */
 
     char reason[128];
@@ -191,7 +192,11 @@ static int expr_name(void *user, const char *name, long *out)
 int smsdebug_eval(smsdebug *d, const char *text, long *out, char *err, int errsz)
 {
     expr_ctx ctx = { expr_name, expr_read, d };
-    return expr_eval(text, &ctx, out, err, errsz);
+    int rc;
+    sms_host_lock();
+    rc = expr_eval(text, &ctx, out, err, errsz);
+    sms_host_unlock();
+    return rc;
 }
 
 /* ---- the hooks (emulation thread) ----------------------------------------- */
@@ -232,9 +237,14 @@ static int cond_true(smsdebug *d, const smsdebug_breakpoint *b)
     return v != 0;
 }
 
-/* Park until a window resumes. Called with d->lock NOT held. */
+/* Park until a window resumes. Called on the emulation thread, with the run
+ * lock held and d->lock not; lets go of the run lock while parked. */
 static void park(smsdebug *d, sms_machine_t *m, uint16_t pc, const char *reason)
 {
+    /* the picture as far as the beam has drawn it, and the cart's latest */
+    sms_host_publish_frame();
+    sms_cart_frame(m->cart);
+
     pthread_mutex_lock(&d->lock);
     snprintf(d->reason, sizeof d->reason, "%s", reason);
     d->reason_addr = pc;
@@ -242,33 +252,13 @@ static void park(smsdebug *d, sms_machine_t *m, uint16_t pc, const char *reason)
     atomic_store(&d->stop_req, 0);
     atomic_store(&d->stopped, 1);
     bump(d);
-    pthread_mutex_unlock(&d->lock);
-
-    /* the picture as far as the beam has drawn it */
-    sms_host_publish_frame();
-    sms_cart_frame(m->cart);
-
-    pthread_mutex_lock(&d->lock);
+    /* parked, the machine is the windows' */
+    sms_host_park_release();
     while (atomic_load(&d->stopped) && atomic_load(&d->attached))
-    {
-        const int want = atomic_exchange(&d->pc_req, -1);
-        if (want >= 0)
-        {
-            /* redirect, and run the new fetch here so the CPU stands on it */
-            pthread_mutex_unlock(&d->lock);
-            m->pins = z80_prefetch(&m->cpu, (uint16_t)want);
-            do
-                sms_machine_tick_quiet(m);
-            while (!z80_opdone(&m->cpu));
-            pthread_mutex_lock(&d->lock);
-            d->reason_addr = want;
-            bump(d);
-            continue;
-        }
         pthread_cond_wait(&d->cond, &d->lock);
-    }
     atomic_store(&d->stopped, 0);
     pthread_mutex_unlock(&d->lock);
+    sms_host_park_reacquire();
 
     /* A poke while stopped may have changed the opcode the CPU already
      * fetched: give it the byte now in memory. */
@@ -422,7 +412,8 @@ static uint8_t watch_bits(smsdebug *d)
     return w;
 }
 
-/* Rebuild the lookup maps and the bus watch. Called with d->lock held. */
+/* Rebuild the lookup maps and the bus watch. Called with the run lock and
+ * d->lock held (the hooks read the maps under the run lock). */
 static void rebuild_locked(smsdebug *d)
 {
     memset(d->map_exec, 0, sizeof d->map_exec);
@@ -456,7 +447,6 @@ smsdebug *smsdebug_create(void)
         return NULL;
     pthread_mutex_init(&d->lock, NULL);
     pthread_cond_init(&d->cond, NULL);
-    atomic_store(&d->pc_req, -1);
     d->next_id = 1;
     d->reason_addr = -1;
     symtab_init(&d->syms);
@@ -494,6 +484,7 @@ void smsdebug_attach(smsdebug *d)
 {
     if (!d)
         return;
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     if (!atomic_load(&d->attached))
     {
@@ -504,12 +495,14 @@ void smsdebug_attach(smsdebug *d)
     }
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
 }
 
 void smsdebug_detach(smsdebug *d)
 {
     if (!d)
         return;
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     atomic_store(&d->attached, 0);
     atomic_store(&d->stop_req, 0);
@@ -518,6 +511,7 @@ void smsdebug_detach(smsdebug *d)
     pthread_cond_broadcast(&d->cond);
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
     /* wait for the parked thread to leave the hook */
     for (int i = 0; i < 2000 && atomic_load(&d->stopped); i++)
     {
@@ -629,55 +623,95 @@ void smsdebug_step(smsdebug *d)
 
 void smsdebug_step_over(smsdebug *d)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     z80d_insn ins;
+    int over = 0;
 
-    if (!d || !m || !atomic_load(&d->stopped))
+    if (!d)
         return;
-    decode_at(m, cur_pc(m), &ins);
-    if ((ins.flags & (Z80D_CALL | Z80D_BLOCK | Z80D_HALT)) ||
-        ((ins.flags & Z80D_RELATIVE) && (ins.flags & Z80D_COND) && ins.bytes[0] == 0x10))
+    sms_host_lock();
+    m = machine();
+    if (m && atomic_load(&d->stopped))
     {
-        /* CALL/RST, the block repeats, HALT and DJNZ: to the next one */
-        d->target = (uint16_t)(cur_pc(m) + ins.len);
-        d->sp_guard = m->cpu.sp;
-        go(d, MODE_OVER);
-        return;
+        decode_at(m, cur_pc(m), &ins);
+        if ((ins.flags & (Z80D_CALL | Z80D_BLOCK | Z80D_HALT)) ||
+            ((ins.flags & Z80D_RELATIVE) && (ins.flags & Z80D_COND) && ins.bytes[0] == 0x10))
+        {
+            /* CALL/RST, the block repeats, HALT and DJNZ: to the next one */
+            d->target = (uint16_t)(cur_pc(m) + ins.len);
+            d->sp_guard = m->cpu.sp;
+            over = 1;
+        }
     }
-    smsdebug_step(d);
+    sms_host_unlock();
+    if (over)
+        go(d, MODE_OVER);
+    else
+        smsdebug_step(d);
 }
 
 void smsdebug_step_out(smsdebug *d)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
+    int ok = 0;
 
-    if (!d || !m || !atomic_load(&d->stopped))
+    if (!d)
         return;
-    /* to the return address the CALL pushed, with an SP-depth guard;
-     * documented-approximate: a routine that juggles its own return address
-     * defeats it, and then the machine runs on rather than stopping wrong */
-    d->target = (uint16_t)(sms_machine_peek(m, m->cpu.sp) | (sms_machine_peek(m, (uint16_t)(m->cpu.sp + 1)) << 8));
-    d->sp_guard = m->cpu.sp;
-    go(d, MODE_OUT);
+    sms_host_lock();
+    m = machine();
+    if (m && atomic_load(&d->stopped))
+    {
+        /* to the return address the CALL pushed, with an SP-depth guard;
+         * documented-approximate: a routine that juggles its own return
+         * address defeats it, and then the machine runs on rather than
+         * stopping wrong */
+        d->target = (uint16_t)(sms_machine_peek(m, m->cpu.sp) |
+                               (sms_machine_peek(m, (uint16_t)(m->cpu.sp + 1)) << 8));
+        d->sp_guard = m->cpu.sp;
+        ok = 1;
+    }
+    sms_host_unlock();
+    if (ok)
+        go(d, MODE_OUT);
 }
 
 void smsdebug_scanline(smsdebug *d, int n)
 {
-    sms_machine_t *m = machine();
-    if (!d || !m || !atomic_load(&d->stopped))
+    sms_machine_t *m;
+    int ok = 0;
+
+    if (!d)
         return;
-    d->last_vpos = sms_vdp_beam_vpos(&m->vdp, m->cycles);
-    d->count = n > 0 ? n : 1;
-    go(d, MODE_SCANLINE);
+    sms_host_lock();
+    m = machine();
+    if (m && atomic_load(&d->stopped))
+    {
+        d->last_vpos = sms_vdp_beam_vpos(&m->vdp, m->cycles);
+        d->count = n > 0 ? n : 1;
+        ok = 1;
+    }
+    sms_host_unlock();
+    if (ok)
+        go(d, MODE_SCANLINE);
 }
 
 void smsdebug_frame(smsdebug *d, int n)
 {
-    sms_machine_t *m = machine();
-    if (!d || !m || !atomic_load(&d->stopped))
+    sms_machine_t *m;
+    int ok = 0;
+
+    if (!d)
         return;
-    d->target_frame = m->vdp.frame_count + (uint64_t)(n > 0 ? n : 1);
-    go(d, MODE_FRAME);
+    sms_host_lock();
+    m = machine();
+    if (m && atomic_load(&d->stopped))
+    {
+        d->target_frame = m->vdp.frame_count + (uint64_t)(n > 0 ? n : 1);
+        ok = 1;
+    }
+    sms_host_unlock();
+    if (ok)
+        go(d, MODE_FRAME);
 }
 
 void smsdebug_run_to(smsdebug *d, uint16_t addr)
@@ -690,12 +724,10 @@ void smsdebug_run_to(smsdebug *d, uint16_t addr)
 
 /* ---- CPU ---------------------------------------------------------------------- */
 
-void smsdebug_cpu_get(smsdebug *d, smsdebug_cpu *o)
+static void cpu_get_locked(sms_machine_t *m, smsdebug_cpu *o)
 {
-    sms_machine_t *m = machine();
     const z80_t *c;
 
-    (void)d;
     memset(o, 0, sizeof *o);
     if (!m)
         return;
@@ -721,6 +753,14 @@ void smsdebug_cpu_get(smsdebug *d, smsdebug_cpu *o)
     o->frame = (uint32_t)m->vdp.frame_count;
 }
 
+void smsdebug_cpu_get(smsdebug *d, smsdebug_cpu *o)
+{
+    (void)d;
+    sms_host_lock();
+    cpu_get_locked(machine(), o);
+    sms_host_unlock();
+}
+
 static void set_flag(z80_t *c, int bit, int on)
 {
     if (on)
@@ -731,25 +771,31 @@ static void set_flag(z80_t *c, int bit, int on)
 
 void smsdebug_cpu_set(smsdebug *d, int reg, int v)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     z80_t *c;
 
-    if (!d || !m || !atomic_load(&d->stopped))
+    if (!d)
         return;
+    sms_host_lock();
+    m = machine();
+    if (!m || !atomic_load(&d->stopped))
+    {
+        sms_host_unlock();
+        return;
+    }
     c = &m->cpu;
     switch (reg)
     {
     case SMS_REG_PC:
-        atomic_store(&d->pc_req, v & 0xffff);
+        /* The opcode at the old PC is already fetched: redirect the CPU and
+         * run the new fetch, so it stands on the new PC as it would have. */
+        m->pins = z80_prefetch(&m->cpu, (uint16_t)(v & 0xffff));
+        do
+            sms_machine_tick_quiet(m);
+        while (!z80_opdone(&m->cpu));
         pthread_mutex_lock(&d->lock);
-        pthread_cond_broadcast(&d->cond);
+        d->reason_addr = v & 0xffff;
         pthread_mutex_unlock(&d->lock);
-        /* the parked thread takes it; wait so a caller reads the new PC */
-        for (int i = 0; i < 1000 && atomic_load(&d->pc_req) >= 0; i++)
-        {
-            struct timespec ts = { 0, 1000000L };
-            nanosleep(&ts, NULL);
-        }
         break;
     case SMS_REG_SP:  c->sp = (uint16_t)v; break;
     case SMS_REG_AF:  c->af = (uint16_t)v; break;
@@ -783,6 +829,7 @@ void smsdebug_cpu_set(smsdebug *d, int reg, int v)
     case SMS_FLAG_C:  set_flag(c, 0, v); break;
     default: break;
     }
+    sms_host_unlock();
     bump(d);
 }
 
@@ -799,14 +846,12 @@ static void snap(const sms_machine_t *m, smsvdp_snap *s)
     memcpy(s->pens, m->vdp.pens, sizeof s->pens);
 }
 
-void smsdebug_vdp_get(smsdebug *d, smsdebug_vdp *o)
+static void vdp_get_locked(sms_machine_t *m, smsdebug_vdp *o)
 {
-    sms_machine_t *m = machine();
     smsvdp_snap *s;
     smsvdp_tables t;
     const sms_vdp_t *v;
 
-    (void)d;
     memset(o, 0, sizeof *o);
     if (!m)
         return;
@@ -862,19 +907,37 @@ void smsdebug_vdp_get(smsdebug *d, smsdebug_vdp *o)
     free(s);
 }
 
+void smsdebug_vdp_get(smsdebug *d, smsdebug_vdp *o)
+{
+    (void)d;
+    sms_host_lock();
+    vdp_get_locked(machine(), o);
+    sms_host_unlock();
+}
+
+/* A copy of the VDP's state under the run lock, for the pure renderers;
+ * NULL when not running. The caller frees it. */
+static smsvdp_snap *take_snap(void)
+{
+    smsvdp_snap *s = NULL;
+    sms_machine_t *m;
+
+    sms_host_lock();
+    m = machine();
+    if (m && (s = malloc(sizeof *s)) != NULL)
+        snap(m, s);
+    sms_host_unlock();
+    return s;
+}
+
 int smsdebug_vdp_describe_register(smsdebug *d, int reg, char *dst, int dstsz)
 {
-    sms_machine_t *m = machine();
     smsvdp_snap *s;
     int n;
 
     (void)d;
-    if (!m || !dst || dstsz <= 0)
+    if (!dst || dstsz <= 0 || (s = take_snap()) == NULL)
         return 0;
-    s = malloc(sizeof *s);
-    if (!s)
-        return 0;
-    snap(m, s);
     n = smsvdp_describe_register(s, reg, dst, dstsz);
     free(s);
     return n;
@@ -882,16 +945,11 @@ int smsdebug_vdp_describe_register(smsdebug *d, int reg, char *dst, int dstsz)
 
 int smsdebug_vdp_view(smsdebug *d, int view, int palette, uint32_t *dst, int *width, int *height)
 {
-    sms_machine_t *m = machine();
     smsvdp_snap *s;
 
     (void)d;
-    if (!m)
+    if ((s = take_snap()) == NULL)
         return 0;
-    s = malloc(sizeof *s);
-    if (!s)
-        return 0;
-    snap(m, s);
     switch (view)
     {
     case SMSDEBUG_VIEW_NAMETABLE: smsvdp_render_nametable(s, dst, width, height, SMSSESSION_ACCENT_RGB); break;
@@ -906,18 +964,13 @@ int smsdebug_vdp_view(smsdebug *d, int view, int palette, uint32_t *dst, int *wi
 
 int smsdebug_sprites_get(smsdebug *d, smsdebug_sprite out[64])
 {
-    sms_machine_t *m = machine();
     smsvdp_snap *s;
     smsvdp_sprite tmp[64];
     int n;
 
     (void)d;
-    if (!m)
+    if ((s = take_snap()) == NULL)
         return 0;
-    s = malloc(sizeof *s);
-    if (!s)
-        return 0;
-    snap(m, s);
     n = smsvdp_sprites(s, tmp);
     for (int i = 0; i < n; i++)
     {
@@ -934,11 +987,8 @@ int smsdebug_sprites_get(smsdebug *d, smsdebug_sprite out[64])
 
 /* ---- sound and I/O -------------------------------------------------------------- */
 
-void smsdebug_io_get(smsdebug *d, smsdebug_io *o)
+static void io_get_locked(sms_machine_t *m, smsdebug_io *o)
 {
-    sms_machine_t *m = machine();
-
-    (void)d;
     memset(o, 0, sizeof *o);
     if (!m)
         return;
@@ -966,16 +1016,8 @@ void smsdebug_io_get(smsdebug *d, smsdebug_io *o)
     memcpy(o->bios_page, m->bios_page, 3);
     for (int i = 0; i < 4; i++)
         o->mapper[i] = m->mainram[0x1ffc + i];
-    if (m->model->is_mark_iii)
-    {
-        o->port_dc = sms_machine_io_peek(m, 0xdc);
-        o->port_dd = sms_machine_io_peek(m, 0xdd);
-    }
-    else
-    {
-        o->port_dc = sms_machine_io_peek(m, 0xdc);
-        o->port_dd = sms_machine_io_peek(m, 0xdd);
-    }
+    o->port_dc = sms_machine_io_peek(m, 0xdc);
+    o->port_dd = sms_machine_io_peek(m, 0xdd);
     o->pad[0] = m->pad[0];
     o->pad[1] = m->pad[1];
     o->pause_held = m->vdp.n_nmi_in_state == 0;
@@ -984,81 +1026,116 @@ void smsdebug_io_get(smsdebug *d, smsdebug_io *o)
     o->console_name = m->model->name;
 }
 
+void smsdebug_io_get(smsdebug *d, smsdebug_io *o)
+{
+    (void)d;
+    sms_host_lock();
+    io_get_locked(machine(), o);
+    sms_host_unlock();
+}
+
 /* ---- memory ------------------------------------------------------------------- */
 
 int smsdebug_read(smsdebug *d, uint16_t addr, uint8_t *dst, int n)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     (void)d;
-    if (!m)
-        return 0;
-    for (int i = 0; i < n; i++)
-        dst[i] = sms_machine_peek(m, (uint16_t)(addr + i));
-    return n;
+    sms_host_lock();
+    m = machine();
+    if (m)
+        for (int i = 0; i < n; i++)
+            dst[i] = sms_machine_peek(m, (uint16_t)(addr + i));
+    sms_host_unlock();
+    return m ? n : 0;
 }
 
 void smsdebug_write(smsdebug *d, uint16_t addr, uint8_t value)
 {
-    sms_machine_t *m = machine();
-    if (!m)
-        return;
-    sms_machine_poke(m, addr, value);
-    bump(d);
+    sms_machine_t *m;
+    sms_host_lock();
+    m = machine();
+    if (m)
+        sms_machine_poke(m, addr, value);
+    sms_host_unlock();
+    if (m)
+        bump(d);
 }
 
 void smsdebug_ram_get(smsdebug *d, uint8_t out[8192])
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     (void)d;
+    sms_host_lock();
+    m = machine();
     if (m)
         memcpy(out, m->mainram, 8192);
     else
         memset(out, 0, 8192);
+    sms_host_unlock();
 }
 
 int smsdebug_vram_read(smsdebug *d, uint16_t addr, uint8_t *dst, int n)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     (void)d;
-    if (!m)
-        return 0;
-    for (int i = 0; i < n; i++)
-        dst[i] = m->vdp.vram[(addr + i) & 0x3fff];
-    return n;
+    sms_host_lock();
+    m = machine();
+    if (m)
+        for (int i = 0; i < n; i++)
+            dst[i] = m->vdp.vram[(addr + i) & 0x3fff];
+    sms_host_unlock();
+    return m ? n : 0;
 }
 
 int smsdebug_vram_write(smsdebug *d, uint16_t addr, const uint8_t *src, int n)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
+    sms_host_lock();
+    m = machine();
+    if (m)
+        for (int i = 0; i < n; i++)
+            m->vdp.vram[(addr + i) & 0x3fff] = src[i];
+    sms_host_unlock();
     if (!m)
         return 0;
-    for (int i = 0; i < n; i++)
-        m->vdp.vram[(addr + i) & 0x3fff] = src[i];
     bump(d);
     return n;
 }
 
 void smsdebug_cram_write(smsdebug *d, int index, uint8_t value)
 {
-    sms_machine_t *m = machine();
-    if (!m || index < 0 || index > 31)
+    sms_machine_t *m;
+    if (index < 0 || index > 31)
         return;
-    m->vdp.CRAM[index] = value;
-    m->vdp.cram_dirty = true;
-    bump(d);
+    sms_host_lock();
+    m = machine();
+    if (m)
+    {
+        m->vdp.CRAM[index] = value;
+        m->vdp.cram_dirty = true;
+    }
+    sms_host_unlock();
+    if (m)
+        bump(d);
 }
 
 /* ---- labels ---------------------------------------------------------------------- */
 
 int smsdebug_bank_at(smsdebug *d, uint16_t addr)
 {
-    sms_cart_t *c = sms_host_cart();
+    sms_cart_t *c;
     int16_t banks[48];
 
     (void)d;
-    if (!c || addr >= 0xc000)
+    if (addr >= 0xc000)
         return SYM_BANK_ANY;
-    sms_cart_page_banks(c, banks);
+    sms_host_lock();
+    c = sms_host_cart();
+    if (c)
+        sms_cart_page_banks(c, banks);
+    sms_host_unlock();
+    if (!c)
+        return SYM_BANK_ANY;
     if (banks[addr >> 10] < 0 || banks[addr >> 10] >= SMSMAP_REV_BANK)
         return SYM_BANK_ANY;
     return banks[addr >> 10] >> 1;   /* 8K SRAM bank -> 16K ROM bank */
@@ -1188,29 +1265,45 @@ static void fill_line(smsdebug *d, sms_machine_t *m, uint16_t addr, smsdebug_lin
 
 int smsdebug_disassemble(smsdebug *d, uint16_t addr, smsdebug_line *out, int max, int *pc_line)
 {
-    sms_machine_t *m = machine();
+    sms_machine_t *m;
     uint16_t pc;
     int n = 0;
 
     if (pc_line)
         *pc_line = -1;
-    if (!d || !m)
+    if (!d)
         return 0;
-    pc = cur_pc(m);
-    while (n < max)
+    sms_host_lock();
+    m = machine();
+    if (m)
     {
-        fill_line(d, m, addr, &out[n], pc);
-        if (out[n].is_pc && pc_line)
-            *pc_line = n;
-        addr = (uint16_t)(addr + out[n].length);
-        n++;
+        pc = cur_pc(m);
+        while (n < max)
+        {
+            fill_line(d, m, addr, &out[n], pc);
+            if (out[n].is_pc && pc_line)
+                *pc_line = n;
+            addr = (uint16_t)(addr + out[n].length);
+            n++;
+        }
     }
+    sms_host_unlock();
     return n;
 }
 
+static int row_address_locked(smsdebug *d, sms_machine_t *m, uint16_t addr, int rows);
+
 int smsdebug_row_address(smsdebug *d, uint16_t addr, int rows)
 {
-    sms_machine_t *m = machine();
+    int a;
+    sms_host_lock();
+    a = row_address_locked(d, machine(), addr, rows);
+    sms_host_unlock();
+    return a;
+}
+
+static int row_address_locked(smsdebug *d, sms_machine_t *m, uint16_t addr, int rows)
+{
     z80d_insn ins;
 
     if (!d || !m || rows == 0)
@@ -1245,13 +1338,12 @@ int smsdebug_row_address(smsdebug *d, uint16_t addr, int rows)
 
 /* ---- the cartridge ----------------------------------------------------------------- */
 
-void smsdebug_cart_get(smsdebug *d, smsdebug_cart *o)
+static void cart_get_locked(smsdebug_cart *o)
 {
     sms_cart_status_t st;
     sms_cart_t *c = sms_host_cart();
     static const char *const modes[] = { "CONFIG", "game", "app (mailbox live)" };
 
-    (void)d;
     memset(o, 0, sizeof *o);
     sms_host_cart_status(&st);
     o->present = st.powered;
@@ -1296,6 +1388,14 @@ void smsdebug_cart_get(smsdebug *d, smsdebug_cart *o)
     o->queue_depth = st.queue;
 }
 
+void smsdebug_cart_get(smsdebug *d, smsdebug_cart *o)
+{
+    (void)d;
+    sms_host_lock();
+    cart_get_locked(o);
+    sms_host_unlock();
+}
+
 int smsdebug_cart_info(smsdebug *d, char *dst, int dstsz)
 {
     smsdebug_cart c;
@@ -1328,10 +1428,12 @@ int smsdebug_breakpoint_add(smsdebug *d, int type, uint16_t start, uint16_t end,
         start = end;
         end = t;
     }
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     if (d->nbp >= MAX_BP)
     {
         pthread_mutex_unlock(&d->lock);
+        sms_host_unlock();
         return -1;
     }
     b = &d->bp[d->nbp++];
@@ -1345,6 +1447,7 @@ int smsdebug_breakpoint_add(smsdebug *d, int type, uint16_t start, uint16_t end,
     rebuild_locked(d);
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
     return id;
 }
 
@@ -1352,6 +1455,7 @@ void smsdebug_breakpoint_remove(smsdebug *d, int id)
 {
     if (!d)
         return;
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     for (int i = 0; i < d->nbp; i++)
     {
@@ -1365,12 +1469,14 @@ void smsdebug_breakpoint_remove(smsdebug *d, int id)
     rebuild_locked(d);
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
 }
 
 void smsdebug_breakpoint_enable(smsdebug *d, int id, int enabled)
 {
     if (!d)
         return;
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     for (int i = 0; i < d->nbp; i++)
         if (d->bp[i].id == id)
@@ -1378,6 +1484,7 @@ void smsdebug_breakpoint_enable(smsdebug *d, int id, int enabled)
     rebuild_locked(d);
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
 }
 
 int smsdebug_breakpoint_list(smsdebug *d, smsdebug_breakpoint *out, int max)
@@ -1396,11 +1503,13 @@ void smsdebug_breakpoint_clear(smsdebug *d)
 {
     if (!d)
         return;
+    sms_host_lock();
     pthread_mutex_lock(&d->lock);
     d->nbp = 0;
     rebuild_locked(d);
     bump(d);
     pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
 }
 
 int smsdebug_breakpoint_check(smsdebug *d, uint16_t addr)
@@ -1445,16 +1554,17 @@ int smsdebug_trace_enabled(smsdebug *d)
     return d && atomic_load(&d->trace_on);
 }
 
+/* The ring is written by the instruction hook, under the run lock. */
 int smsdebug_trace_read(smsdebug *d, smsdebug_trace *out, int max)
 {
     int n;
     if (!d)
         return 0;
-    pthread_mutex_lock(&d->lock);
+    sms_host_lock();
     n = d->ring_count < max ? d->ring_count : max;
     for (int i = 0; i < n; i++)
         out[i] = d->ring[(d->ring_head - 1 - i + TRACE_N) % TRACE_N];
-    pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
     return n;
 }
 
@@ -1462,9 +1572,9 @@ void smsdebug_trace_clear(smsdebug *d)
 {
     if (!d)
         return;
-    pthread_mutex_lock(&d->lock);
+    sms_host_lock();
     d->ring_head = d->ring_count = 0;
-    pthread_mutex_unlock(&d->lock);
+    sms_host_unlock();
     bump(d);
 }
 
@@ -1487,10 +1597,21 @@ static int write_bytes(const char *path, const uint8_t *data, size_t n, char *ms
     return 0;
 }
 
+static int save_locked(smsdebug *d, sms_machine_t *m, const char *kind, const char *path,
+                       char *msg, int msgsz);
+
 int smsdebug_save(smsdebug *d, const char *kind, const char *path, char *msg, int msgsz)
 {
-    sms_machine_t *m = machine();
+    int rc;
+    sms_host_lock();
+    rc = save_locked(d, machine(), kind, path, msg, msgsz);
+    sms_host_unlock();
+    return rc;
+}
 
+static int save_locked(smsdebug *d, sms_machine_t *m, const char *kind, const char *path,
+                       char *msg, int msgsz)
+{
     if (!d || !m || !kind || !path)
     {
         if (msg && msgsz > 0)
@@ -1562,8 +1683,8 @@ int smsdebug_save(smsdebug *d, const char *kind, const char *path, char *msg, in
         {
             smsdebug_cpu c;
             smsdebug_vdp v;
-            smsdebug_cpu_get(d, &c);
-            smsdebug_vdp_get(d, &v);
+            cpu_get_locked(m, &c);
+            vdp_get_locked(m, &v);
             fprintf(f, "PC=%04X SP=%04X AF=%04X BC=%04X DE=%04X HL=%04X IX=%04X IY=%04X\n",
                     c.pc, c.sp, c.af, c.bc, c.de, c.hl, c.ix, c.iy);
             fprintf(f, "AF'=%04X BC'=%04X DE'=%04X HL'=%04X I=%02X R=%02X IM=%d IFF1=%d IFF2=%d\n",
