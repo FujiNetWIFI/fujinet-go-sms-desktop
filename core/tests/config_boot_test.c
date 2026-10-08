@@ -9,8 +9,8 @@
  *
  * CONFIG's screens are recognised by their text, read from the name table
  * (CONFIG's font puts character c at tile c, bit 8 selecting its highlight
- * colours), and a splash that waits for button 1 gets it. Needs nothing but
- * the FujiNet runtime; SKIPs (77) without it.
+ * colours); a splash that asks for button 1 is left to go on by itself.
+ * Needs nothing but the FujiNet runtime; SKIPs (77) without it.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -73,21 +73,16 @@ static int wait_screen(smsdebug *d, const char *text, int timeout_ms)
     return 0;
 }
 
-static void press(smssession *s, int target);
-
-/* CONFIG's host list, past a splash that waits for button 1 (newer CONFIGs
- * ask; older ones go straight on). */
-static int wait_hosts(smssession *s, smsdebug *d, int timeout_ms)
+/* CONFIG's host list. The Phantasy Star-style CONFIG's splash says PRESS
+ * BUTTON 1 but goes on by itself half a second after its fanfare, so the
+ * test waits rather than presses: CONFIG queues a press, and one made while
+ * the splash is fading out lands on the host list as 1 OPEN. */
+static int wait_hosts(smsdebug *d, int timeout_ms)
 {
     for (int waited = 0; waited < timeout_ms; waited += 100)
     {
         if (screen_has(d, "SELECT A HOST"))
             return 1;
-        if (screen_has(d, "PRESS BUTTON 1"))
-        {
-            press(s, SMS_TARGET_PORT(0, SMS_ACT_1));
-            waited += 400;
-        }
         sleep_ms(100);
     }
     printf("  (no host list on screen)\n");
@@ -181,7 +176,7 @@ int main(void)
     d = smssession_debugger(s);
 
     check(smssession_import_cart_to_sd(s, rom, dest, sizeof dest) == 0, "the image imported to SD");
-    check(wait_hosts(s, d, 30000), "CONFIG shows its host list");
+    check(wait_hosts(d, 60000), "CONFIG shows its host list");
     check(wait_screen(d, "1 SD", 20000), "with the SD host first, once FujiNet has sent the slots");
 
     /* CONFIG reads the pad once it has settled on a screen; a press it was
@@ -215,7 +210,7 @@ int main(void)
 
     test_crash_phase("resetting to CONFIG");
     check(smssession_reset_to_config(s) == 0, "reset to CONFIG");
-    check(wait_hosts(s, d, 30000), "CONFIG's host list is back");
+    check(wait_hosts(d, 60000), "CONFIG's host list is back");
     check(!smssession_cart_booted_game(s), "and nothing booted");
 
     test_crash_phase("stopping the session");
