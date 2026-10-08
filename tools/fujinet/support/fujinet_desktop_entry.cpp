@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "fnSystem.h"
+#include "fujiDevice.h"
 
 extern void main_setup(int argc, char* argv[]);
 extern void fn_service_loop(void* param);
@@ -547,6 +548,26 @@ FUJINET_ENTRY int fujinet_desktop_copy_recent_log(char* output, int maxBytes) {
     return static_cast<int>(copyable);
 }
 
+/* The firmware's globals are not built to be destroyed in just any order.
+ * At process exit (or the library's unload) ~fujiHost runs cleanup(), which
+ * calls dir_close on the SD host's filesystem -- fnSDFAT, another
+ * translation unit's global that may already have been destroyed -- and its
+ * directory cache is freed twice: on Windows the process dies on the way
+ * out once CONFIG has listed the SD card. fujiDevice::shutdown keeps the
+ * local host mounted on purpose (it survives a restart), so return every
+ * host to uninitialized here instead, while all the globals still exist.
+ * Registered at the first start -- after every global was constructed -- so
+ * it runs before their destructors. Skipped if a wedged runtime thread was
+ * left running (stop gave up on it): it may still be using the hosts. */
+static void release_hosts_at_exit()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_running || theFuji == nullptr)
+        return;
+    for (int i = 0; i < MAX_HOSTS; i++)
+        theFuji->get_host(i)->set_type(HOSTTYPE_UNINITIALIZED);
+}
+
 FUJINET_ENTRY bool fujinet_desktop_start_runtime(
         const char* runtimeRootPath,
         const char* configPath,
@@ -566,6 +587,14 @@ FUJINET_ENTRY bool fujinet_desktop_start_runtime(
     if (runtimeRootPath == nullptr || configPath == nullptr || sdPath == nullptr) {
         set_last_error_locked("FujiNet runtime arguments were missing");
         return false;
+    }
+
+    {
+        static bool exit_hook;
+        if (!exit_hook) {
+            exit_hook = true;
+            atexit(release_hosts_at_exit);
+        }
     }
 
     fnSystem.clear_shutdown_request();
