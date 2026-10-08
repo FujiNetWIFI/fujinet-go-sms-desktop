@@ -192,8 +192,18 @@ Every control is remappable in the Controllers window.
   the bring-up's fujiboot → `hello.sms` network boot with the mailbox on its
   worker thread and inline, plus the 80K `fujibank` app (`netboot`).
   ThreadSanitizer is clean over every threaded test.
-- **Windows** — the core and session tests, cross-built with mingw-w64, pass
-  under Wine; CI builds natively with MSYS2/UCRT64.
+- **GNOME and KDE** — built together with no frontend warnings, desktop and
+  metainfo files validated, and smoke-launched headless (GTK Broadway, Qt
+  offscreen) with the debugger, Controllers and Preferences open; every
+  window and debugger tab was rendered to an image and looked at.
+- **Windows** — the Win32 frontend cross-builds with mingw-w64 with no
+  warnings, the core and session tests pass under Wine, and CI builds and
+  tests it natively with MSYS2/UCRT64 — including `config_boot` against the
+  real `fujinet.dll`. Not yet run on a Windows desktop.
+- **macOS** — compiled and tested only by CI, on Apple Silicon and Intel;
+  never run on a Mac yet. The runners' sleeps are too coarse to hold the
+  frame rate to 2% there (`boot_smoke` reports it and checks the throttle
+  instead).
 
 ## Cutting a release
 

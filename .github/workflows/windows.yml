@@ -71,6 +71,8 @@ jobs:
             exe=$(ctest -V -R "^$t$" -N 2>/dev/null | sed -n 's/^[0-9]*: Test command: *//p' | head -1 | tr -d '"')
             [ -n "$exe" ] || continue
             echo "=== $t ($exe) ==="
-            timeout 300 gdb -q -batch -ex "set pagination off" -ex run \
+            # _NO_DEBUG_HEAP: a process started under a debugger otherwise
+            # gets Windows' debug heap, which hides heap misuse
+            _NO_DEBUG_HEAP=1 timeout 300 gdb -q -batch -ex "set pagination off" -ex run \
               -ex "thread apply all bt 30" -ex "info registers" --args "$exe" 2>&1 | tail -200 || true
           done
