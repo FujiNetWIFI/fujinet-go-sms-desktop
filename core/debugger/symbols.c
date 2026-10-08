@@ -61,7 +61,14 @@ int symtab_add(symtab *t, uint16_t addr, int bank, const char *name, int builtin
     e->addr = addr;
     e->bank = (int16_t)bank;
     e->builtin = (uint8_t)(builtin != 0);
-    snprintf(e->name, sizeof e->name, "%s", name);
+    {
+        /* a longer name is clipped to the table's width */
+        size_t len = strlen(name);
+        if (len >= sizeof e->name)
+            len = sizeof e->name - 1;
+        memcpy(e->name, name, len);
+        e->name[len] = '\0';
+    }
     t->sorted = 0;
     return 0;
 }
