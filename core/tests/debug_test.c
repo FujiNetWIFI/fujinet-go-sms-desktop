@@ -420,6 +420,16 @@ int main(void)
     smsdebug_breakpoint_clear(d);
     smsdebug_detach(d);
 
+    /* attached before the session starts (a window opened first): the
+     * machine stops as soon as it exists */
+    smssession_stop(s);
+    smsdebug_attach(d);
+    o.cart_path = rom;
+    check(smssession_start(s, &o) == 0, "restart with the debugger already attached");
+    check(wait_stopped(d, 1, 3000), "the new machine stops in the debugger at once");
+    smsdebug_detach(d);
+    check(!smsdebug_is_stopped(d), "and runs when it detaches");
+
     smssession_stop(s);
     smssession_free(s);
     printf("%d failure(s)\n", failures);

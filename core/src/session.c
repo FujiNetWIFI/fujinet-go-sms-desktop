@@ -287,7 +287,14 @@ static int host_up(struct smssession *s, const char *cart_path)
     if (sms_console_has_fm(s->opts.console))
         inst = roms_load_instruments(s);
 
-    snprintf(boip, sizeof boip, "127.0.0.1:%d", SMSSESSION_BOIP_PORT);
+    /* The cartridge dials FujiNet's BoIP port -- the in-process runtime's,
+     * or a standalone fujinet-pc's when the runtime is switched off. A
+     * session whose FujiNet is disabled outright (fujinet_lib "", the tests)
+     * dials a closed port, so it can never pick up someone else's FujiNet. */
+    if (s->fujinet_disabled)
+        snprintf(boip, sizeof boip, "127.0.0.1:1");
+    else
+        snprintf(boip, sizeof boip, "127.0.0.1:%d", SMSSESSION_BOIP_PORT);
     ho.model = (sms_model_t)s->opts.console;
     ho.bios = bios;
     ho.bios_size = bios_len;

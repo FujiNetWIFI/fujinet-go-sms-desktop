@@ -535,9 +535,15 @@ void smsdebug_power_down(smsdebug *d)
 
 void smsdebug_power_up(smsdebug *d)
 {
+    int want;
+
     if (!d)
         return;
-    if (d->was_attached)
+    /* attached across the power cycle, or attached before there was a
+     * machine to hook (a window opened before the session started) */
+    want = d->was_attached || atomic_load(&d->attached);
+    atomic_store(&d->attached, 0);
+    if (want)
         smsdebug_attach(d);
     d->was_attached = 0;
 }
