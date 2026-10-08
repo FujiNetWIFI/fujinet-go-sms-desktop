@@ -89,10 +89,45 @@ static void run(sms_model_t model, double want_hz, int want_height)
     check(sms_host_frame_rate() > want_hz - 0.01 && sms_host_frame_rate() < want_hz + 0.01, what);
 
     sms_host_stop();
+    {
+        sms_host_pacing_t pc;
+        sms_host_pacing(&pc);
+        printf("  pacing: %llu sleeps, %.2f ms late on average, worst %.2f ms, %llu resyncs\n",
+               (unsigned long long)pc.sleeps,
+               pc.sleeps ? (double)pc.late_ns / (double)pc.sleeps / 1e6 : 0.0,
+               (double)pc.worst_late_ns / 1e6, (unsigned long long)pc.resyncs);
+    }
+}
+
+/* How fast this machine runs the core with no host and no throttle: the
+ * pacing check means nothing on a runner that cannot keep up. */
+static double capacity(sms_model_t model)
+{
+    static sms_machine_t m;
+    char why[160];
+    sms_cart_t *c = sms_cart_create();
+    double t0, t1;
+    const int frames = 120;
+
+    sms_cart_power_on(c, NULL, 0, NULL, "127.0.0.1:1", true, why, sizeof why);
+    sms_machine_init(&m, model, NULL, 0, NULL, false, false, c);
+    t0 = now_s();
+    for (int f = 0; f < frames; f++)
+    {
+        sms_machine_run_frame(&m);
+        sms_machine_latch_inputs(&m);
+    }
+    t1 = now_s();
+    sms_machine_free(&m);
+    sms_cart_destroy(c);
+    return frames / (t1 - t0);
 }
 
 int main(void)
 {
+    /* before the host exists: the cart device is one per process */
+    printf("  the bare core runs %.0f frames/s (NTSC) and %.0f (PAL) here\n",
+           capacity(SMS_MODEL_SMS1), capacity(SMS_MODEL_SMS2_PAL));
     run(SMS_MODEL_SMS1, 59.9227, 224);
     run(SMS_MODEL_SMS2_PAL, 49.7015, 240);
     printf("%d failure(s)\n", failures);

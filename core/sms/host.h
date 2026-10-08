@@ -69,6 +69,14 @@ void sms_host_soft_reset(void);
 int sms_host_frame_copy(uint32_t *dst, int *height, uint64_t *serial_inout);
 /* Frames the machine has run since start (for pacing checks). */
 uint64_t sms_host_frame_count(void);
+/* How the deadline ladder fared (boot_smoke prints it): sleeps taken, how
+ * late they woke in total and at worst, and resyncs after falling more
+ * than four frames behind. Read after sms_host_stop. */
+typedef struct {
+    uint64_t sleeps, late_ns, resyncs;
+    long worst_late_ns;
+} sms_host_pacing_t;
+void sms_host_pacing(sms_host_pacing_t *out);
 /* The running machine's exact frame rate in Hz (0 when stopped). */
 double sms_host_frame_rate(void);
 

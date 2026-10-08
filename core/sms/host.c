@@ -16,6 +16,9 @@
 
 #include <pthread.h>
 #include <sched.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +46,7 @@ static char s_boip[128];
 static bool s_have_boip = false;
 static bool s_cart_sync = false;
 static long s_frame_ns = 16688154;
+static sms_host_pacing_t s_pacing;     /* machine thread only; read after stop */
 static atomic_uint_fast64_t s_frames = 0;
 static double s_frame_hz = 0.0;
 
@@ -440,9 +444,17 @@ static void *machine_thread(void *arg)
 
     (void)arg;
 
+#if defined(__APPLE__)
+    /* Darwin coalesces the timers of a default-QoS thread with no UI, by
+     * whole frames on a busy machine; an emulator's frame clock is
+     * interactive work. */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+
     /* the machine thread holds the run lock whenever it runs the machine;
      * its own nested sms_host_lock calls (the debugger's hooks) are no-ops */
     t_lock_depth = 1;
+    memset(&s_pacing, 0, sizeof s_pacing);
     pthread_mutex_lock(&s_run_lock);
 
     /* Bring the cartridge up here rather than on the caller's thread: the
@@ -514,9 +526,25 @@ static void *machine_thread(void *arg)
         {
             long behind = ts_diff_ns(&now, &next);
             if (behind > 4 * frame_ns)
+            {
                 next = now;
+                s_pacing.resyncs++;
+            }
             else if (behind < 0)
+            {
+                struct timespec woke;
+                long late;
                 sleep_until(&next, &now);
+                clock_gettime(CLOCK_MONOTONIC, &woke);
+                late = ts_diff_ns(&woke, &next);
+                s_pacing.sleeps++;
+                if (late > 0)
+                {
+                    s_pacing.late_ns += (uint64_t)late;
+                    if (late > s_pacing.worst_late_ns)
+                        s_pacing.worst_late_ns = late;
+                }
+            }
         }
         run_lock_take();
     }
@@ -623,6 +651,11 @@ int sms_host_start(const sms_host_opts_t *opts)
     }
     atomic_store(&s_running, true);
     return 0;
+}
+
+void sms_host_pacing(sms_host_pacing_t *out)
+{
+    *out = s_pacing;
 }
 
 void sms_host_stop(void)
