@@ -70,12 +70,13 @@
       <description>
         <p>
           First release: the Master System transposed from MAME with the
-          FujiNet SMS cartridge and an in-process FujiNet, and the CONFIG
-          client restyled after Phantasy Star's menus. Six consoles,
-          including the Japanese Master System with its FM sound and the
-          Mark III; native GNOME, KDE, macOS and Windows frontends; both
-          joypads on screen, hotplugged gamepads, an optional BIOS import,
-          Soft Reset and Reset to CONFIG, and a native debugger.
+          FujiNet SMS cartridge and an in-process FujiNet, and the
+          CONFIG client restyled after Phantasy Star's menus, with a
+          progress bar while a game loads. Six consoles, including the
+          Japanese Master System with its FM sound and the Mark III;
+          native GNOME, KDE, macOS and Windows frontends; both joypads
+          on screen, hotplugged gamepads, an optional BIOS import, Soft
+          Reset and Reset to CONFIG, and a native debugger.
         </p>
       </description>
     </release>
