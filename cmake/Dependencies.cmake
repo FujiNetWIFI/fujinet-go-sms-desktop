@@ -34,12 +34,12 @@
 
 find_package(Git QUIET)
 
-# fujinet-firmware, branch add-sms (10f055b87): the Sega Master System
+# fujinet-firmware, branch add-sms (8f7389de6): the Sega Master System
 # cartridge (pico/sms) with the Phantasy Star-style CONFIG baked in, its
-# mount and boot progress window included.
+# mount and boot progress window and long-filename scroll included.
 # Recorded in three places -- here and in both flatpak manifests
 # (build-aux/flatpak/*.yml).
-set(FUJINET_COMMIT "10f055b87f0b5f0dbcbca0634190d134a99a73e9")
+set(FUJINET_COMMIT "8f7389de6bf387b8db55169a85b0fe56c91254e4")
 set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
 
 # sms_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>
