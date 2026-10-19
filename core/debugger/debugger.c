@@ -24,6 +24,9 @@
  * lock held and take d->lock). A PC change runs the new opcode fetch on the
  * caller's thread, under the run lock, as the parked thread would have.
  *
+ * The FujiNet trace stands apart: the transport feeds it (fujitrace.c) from
+ * session start, attached or not, on its own thread and under its own lock.
+ *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -36,11 +39,13 @@
 
 #include "debugger_internal.h"
 #include "expr.h"
+#include "fujitrace.h"
 #include "vdpview.h"
 #include "z80dasm.h"
 
 #include "host.h"
 #include "fuji_mailbox.h"
+#include "fujitcp_host.h"
 #include "smsmap.h"
 
 #define MAX_BP     128
@@ -85,7 +90,13 @@ struct smsdebug {
 
     symtab syms;
     char cart_path[1024];
+
+    /* the FujiNet trace, fed on the transport's thread */
+    pthread_mutex_t fuji_lock;
+    fujitrace fuji;
 };
+
+static smsdebug *g_traced;       /* the engine the transport's tap feeds */
 
 static sms_machine_t *machine(void)
 {
@@ -447,6 +458,8 @@ smsdebug *smsdebug_create(void)
         return NULL;
     pthread_mutex_init(&d->lock, NULL);
     pthread_cond_init(&d->cond, NULL);
+    pthread_mutex_init(&d->fuji_lock, NULL);
+    fujitrace_init(&d->fuji);
     d->next_id = 1;
     d->reason_addr = -1;
     symtab_init(&d->syms);
@@ -457,11 +470,35 @@ void smsdebug_free(smsdebug *d)
 {
     if (!d)
         return;
+    if (g_traced == d)
+    {
+        fujitcp_set_trace(NULL, NULL);
+        g_traced = NULL;
+    }
     smsdebug_detach(d);
     symtab_free(&d->syms);
     pthread_mutex_destroy(&d->lock);
     pthread_cond_destroy(&d->cond);
+    pthread_mutex_destroy(&d->fuji_lock);
     free(d);
+}
+
+/* the transport's thread: the cartridge's worker, or the emulation thread
+ * in sync mode */
+static void fuji_tap(void *user, int dir, const uint8_t *buf, size_t len)
+{
+    smsdebug *d = user;
+    pthread_mutex_lock(&d->fuji_lock);
+    fujitrace_feed(&d->fuji, dir, buf, len);
+    pthread_mutex_unlock(&d->fuji_lock);
+}
+
+void smsdebug_fujinet_install(smsdebug *d)
+{
+    if (!d)
+        return;
+    g_traced = d;
+    fujitcp_set_trace(fuji_tap, d);
 }
 
 static void hook(smsdebug *d)
@@ -1420,6 +1457,61 @@ int smsdebug_cart_info(smsdebug *d, char *dst, int dstsz)
     return snprintf(dst, (size_t)dstsz, "FujiNet cartridge: %s, %s mapper, %u bytes%s, link %s",
                     c.mode_name, c.mapper_name, c.image_size, c.direct ? " (opened file)" : "",
                     c.link_up ? "up" : "down");
+}
+
+/* ---- FujiNet --------------------------------------------------------------------- */
+
+int smsdebug_fujinet_trace(smsdebug *d, smsdebug_fuji_packet *out, int max)
+{
+    int n;
+    if (!d)
+        return 0;
+    pthread_mutex_lock(&d->fuji_lock);
+    n = fujitrace_read(&d->fuji, out, max);
+    pthread_mutex_unlock(&d->fuji_lock);
+    return n;
+}
+
+void smsdebug_fujinet_trace_clear(smsdebug *d)
+{
+    if (!d)
+        return;
+    pthread_mutex_lock(&d->fuji_lock);
+    fujitrace_clear(&d->fuji);
+    pthread_mutex_unlock(&d->fuji_lock);
+}
+
+int smsdebug_fujinet_state(smsdebug *d, char *dst, int dstsz)
+{
+    smsdebug_cart c;
+    int n;
+
+    smsdebug_cart_get(d, &c);
+    if (!c.present)
+        return snprintf(dst, (size_t)dstsz, "The cartridge is not powered.\n");
+    n = snprintf(dst, (size_t)dstsz,
+        "Link         %s%s\n"
+        "Mode         %s%s\n"
+        "\n"
+        "Mailbox\n"
+        "  ACKSEQ     $%02X\n"
+        "  STATUS     $%02X\n"
+        "  last error %u\n"
+        "  reply cmd  $%02X\n"
+        "  RXLEN      %u\n"
+        "  queue      %u\n"
+        "\n"
+        "Boot         state %d  %d%%\n"
+        "             error %d\n"
+        "             %u of %u bytes\n"
+        "Load         state %d  %d%%\n"
+        "             window %d of %d\n",
+        c.link_up ? "up" : "down", c.busy ? ", transaction in flight" : "",
+        c.mode_name ? c.mode_name : "?", c.booted_game ? ", game booted" : "",
+        c.ackseq, c.status, c.last_error, c.reply_cmd, c.rxlen, c.queue_depth,
+        c.boot_state, c.boot_pct, c.boot_err, c.boot_got, c.boot_total,
+        c.load_state, c.load_pct, c.load_win, c.load_nwin);
+    return n < dstsz ? n : dstsz - 1;
 }
 
 /* ---- breakpoints ---------------------------------------------------------------- */

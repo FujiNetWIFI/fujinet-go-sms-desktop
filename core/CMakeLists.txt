@@ -64,7 +64,7 @@ set(SMS_EMU_SOURCES
   sms/host.c)
 
 set(SMS_DEBUGGER_SOURCES)
-foreach(_f debugger.c expr.c prompt.c z80dasm.c symbols.c symbols_builtin.c vdpview.c cartview.c)
+foreach(_f debugger.c expr.c fujitrace.c prompt.c z80dasm.c symbols.c symbols_builtin.c vdpview.c cartview.c)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/debugger/${_f}")
     list(APPEND SMS_DEBUGGER_SOURCES debugger/${_f})
   endif()

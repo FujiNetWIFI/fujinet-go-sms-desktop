@@ -20,6 +20,7 @@
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextBlock>
@@ -78,8 +79,38 @@ QString hx(unsigned v, int digits)
 
 QString yesNo(int v) { return v ? QStringLiteral("yes") : QStringLiteral("no"); }
 
+/* Whether a view's reader is at its end (a log then follows new lines). */
+bool atEnd(QPlainTextEdit *v)
+{
+    return v->verticalScrollBar()->value() >= v->verticalScrollBar()->maximum() - 1;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+void setText(QPlainTextEdit *v, const QString &text, bool follow = false)
+{
+    if (v->toPlainText() == text) {
+        if (follow) v->verticalScrollBar()->setValue(v->verticalScrollBar()->maximum());
+        return;
+    }
+    const int top = v->verticalScrollBar()->value(), left = v->horizontalScrollBar()->value();
+    v->setPlainText(text);
+    v->verticalScrollBar()->setValue(follow ? v->verticalScrollBar()->maximum() : top);
+    v->horizontalScrollBar()->setValue(left);
+}
+
+QLabel *titleLabel(const QString &text)
+{
+    auto *l = new QLabel(text);
+    QFont f = l->font();
+    f.setBold(true);
+    l->setFont(f);
+    return l;
+}
+
 /* The order of the tabs, and their names for SMS_DEBUGGER_TAB. */
-const char *const kTabNames[] = { "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart" };
+const char *const kTabNames[] = { "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart", "fujinet" };
+const int kTabFujinet = 7;   /* refreshed live only while it shows */
 
 QPointer<DebuggerWindow> s_win;
 
@@ -112,7 +143,7 @@ DebuggerWindow::DebuggerWindow(smssession *session, QWidget *parent)
     auto *central = new QWidget;
     auto *root = new QVBoxLayout(central);
     root->addWidget(buildToolbar());
-    auto *tabs = new QTabWidget;
+    auto *tabs = m_tabs = new QTabWidget;
     tabs->addTab(buildPrompt(), QStringLiteral("Prompt"));
     tabs->addTab(buildCpu(), QStringLiteral("CPU && RAM"));
     tabs->addTab(buildDisasm(), QStringLiteral("Disassembly"));
@@ -120,6 +151,7 @@ DebuggerWindow::DebuggerWindow(smssession *session, QWidget *parent)
     tabs->addTab(buildSound(), QStringLiteral("Sound && I/O"));
     tabs->addTab(buildBreaks(), QStringLiteral("Breakpoints"));
     tabs->addTab(buildCart(), QStringLiteral("Cart"));
+    tabs->addTab(buildFujinet(), QStringLiteral("FujiNet"));
     /* SMS_DEBUGGER_TAB: an index, or a tab's name (or the start of one) */
     if (qEnvironmentVariableIsSet("SMS_DEBUGGER_TAB")) {
         const QString want = qEnvironmentVariable("SMS_DEBUGGER_TAB").trimmed().toLower();
@@ -132,6 +164,9 @@ DebuggerWindow::DebuggerWindow(smssession *session, QWidget *parent)
         }
         if (n >= 0 && n < tabs->count()) tabs->setCurrentIndex(n);
     }
+    connect(tabs, &QTabWidget::currentChanged, this, [this](int page) {
+        if (page == kTabFujinet) refreshFujinet(false);
+    });
     root->addWidget(tabs, 1);
     setCentralWidget(central);
 
@@ -524,6 +559,44 @@ QWidget *DebuggerWindow::buildCart()
     return m_cart;
 }
 
+/* The packets left (a note and Clear over them), the cartridge's mailbox
+ * right. */
+QWidget *DebuggerWindow::buildFujinet()
+{
+    auto *split = new QSplitter(Qt::Horizontal);
+    auto *left = new QWidget;
+    auto *lv = new QVBoxLayout(left);
+    lv->addWidget(titleLabel(QStringLiteral("FujiBus packets (SLIP-decoded)")));
+    auto *row = new QHBoxLayout;
+    m_fujiNote = new QLabel;
+    m_fujiNote->setStyleSheet(QStringLiteral("color: gray;"));
+    m_fujiNote->setWordWrap(true);
+    auto *clear = new QPushButton(QStringLiteral("Clear"));
+    connect(clear, &QPushButton::clicked, this, [this] {
+        smsdebug_fujinet_trace_clear(m_dbg);
+        refreshFujinet(true);
+    });
+    row->addWidget(m_fujiNote, 1);
+    row->addWidget(clear);
+    lv->addLayout(row);
+    m_fujiText = monoView(false);
+    lv->addWidget(m_fujiText, 1);
+    left->setMinimumWidth(560);
+
+    auto *right = new QWidget;
+    auto *rv = new QVBoxLayout(right);
+    rv->addWidget(titleLabel(QStringLiteral("The cartridge's mailbox")));
+    m_fujiState = monoView(false);
+    rv->addWidget(m_fujiState, 1);
+    right->setMinimumWidth(320);
+    split->addWidget(left);
+    split->addWidget(right);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 2);
+    split->setChildrenCollapsible(false);
+    return split;
+}
+
 /* ---- refresh -------------------------------------------------------------- */
 
 void DebuggerWindow::refreshStatus()
@@ -856,10 +929,45 @@ void DebuggerWindow::refreshCart()
     m_cart->verticalScrollBar()->setValue(scroll);
 }
 
+/* The packet log is rebuilt only when it changed: a new packet, or a
+ * repeat (which moves the newest serial on). */
+void DebuggerWindow::refreshFujinet(bool force)
+{
+    static smsdebug_fuji_packet p[512];
+    static char state[2048];
+    const int n = smsdebug_fujinet_trace(m_dbg, p, 512);
+    if (!smssession_fujinet_running(m_session)) {
+        m_fujiNote->setText(QStringLiteral("FujiNet is off (Preferences ▸ FujiNet)."));
+    } else {
+        char status[128];
+        smssession_cart_status(m_session, status, sizeof status);
+        m_fujiNote->setText(QStringLiteral("FujiNet is on. Cartridge: %1.").arg(QString::fromUtf8(status)));
+    }
+    state[0] = '\0';
+    smsdebug_fujinet_state(m_dbg, state, sizeof state);
+    setText(m_fujiState, QString::fromUtf8(state));
+
+    if (!force && n == m_fujiCount && (n == 0 || p[n - 1].serial == m_fujiLast)) return;
+    m_fujiCount = n;
+    m_fujiLast = n > 0 ? p[n - 1].serial : 0;
+    QString t;
+    for (int i = 0; i < n; ++i) {
+        if (i) t += QLatin1Char('\n');
+        t += QString::fromUtf8(p[i].text);
+        if (p[i].repeat > 1) t += QStringLiteral(" ×%1").arg(p[i].repeat);
+        t += QStringLiteral("\n     ");
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            t += QStringLiteral("%1 ").arg(hx(p[i].data[k], 2));
+        if (p[i].nbytes > (int)sizeof p[i].data) t += QStringLiteral("…");
+    }
+    if (n == 0) t = QStringLiteral("(no FujiBus packets since the trace was cleared)");
+    setText(m_fujiText, t, force || atEnd(m_fujiText));
+}
+
 void DebuggerWindow::refreshAll()
 {
     refreshStatus(); refreshCpu(); refreshRam(); refreshDisasm(); refreshVdp(); refreshSound();
-    refreshBps(); refreshCart();
+    refreshBps(); refreshCart(); refreshFujinet(false);
 }
 
 /* Every smsdebug call takes the host's run lock, so the live tabs are safe
@@ -875,6 +983,7 @@ void DebuggerWindow::tick()
     } else if (!stopped && ++m_runningTicks >= 5) {
         m_runningTicks = 0;
         refreshStatus(); refreshCpu(); refreshRam(); refreshVdp(); refreshSound(); refreshCart();
+        if (m_tabs->currentIndex() == kTabFujinet) refreshFujinet(false);
     }
 }
 

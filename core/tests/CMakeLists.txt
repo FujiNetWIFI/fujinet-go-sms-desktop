@@ -49,6 +49,12 @@ add_test(NAME dasm COMMAND dasm_test)
 sms_test(vdp_decode_test vdp_decode_test.c)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
 
+# The debugger's FujiNet trace on byte streams built in the test: both
+# directions, split frames, a send dropping a cut-short reply, repeats and
+# repeated exchanges counted as one, the ring's limit and Clear.
+sms_test(fujitrace_test fujitrace_test.c)
+add_test(NAME fujitrace COMMAND fujitrace_test)
+
 # These need the session layer, which needs SDL3. On a build without it
 # (a cross-toolchain, or a lean machine) only the core libraries build.
 if(TARGET sms_session)
@@ -108,8 +114,8 @@ add_test(NAME debug COMMAND debug_test)
 set_tests_properties(debug PROPERTIES TIMEOUT 120)
 
 # The real in-process FujiNet: brings libfujinet up on its port, boots the
-# CONFIG client and confirms the cartridge's link came up, and comes up again
-# after a power cycle. SKIPs (77) when the runtime was not built
+# CONFIG client and confirms the cartridge's link came up (and the debugger's
+# FujiNet trace saw both ways), and comes up again after a power cycle. SKIPs (77) when the runtime was not built
 # (-DWITH_FUJINET=OFF). Serial: it owns the port.
 sms_session_test(fujibus_smoke fujibus_smoke.c)
 add_test(NAME fujibus_smoke COMMAND fujibus_smoke)

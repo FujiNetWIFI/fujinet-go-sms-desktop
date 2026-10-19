@@ -2,7 +2,7 @@
  * Debugger window (AppKit) over this app's Z80 / 315-5124 debugger engine,
  * via core/include/smsdebug.h. Mirrors the GTK, Qt and Win32 debuggers tab
  * for tab: Prompt, CPU & RAM, Disassembly, VDP, Sound & I/O, Breakpoints,
- * Cart.
+ * Cart, FujiNet.
  *
  * Opening the window attaches the engine, which stops the machine; closing
  * it detaches, and the machine runs on.
@@ -28,7 +28,9 @@
 #define NUM_REGS 17
 #define NUM_FLAGS 6
 #define CRAM_ENTRIES 32
-#define TAB_VDP 3            /* the tab refreshed live while running */
+#define TAB_VDP 3            /* the tabs refreshed live while running and showing */
+#define TAB_FUJINET 7
+#define TRACE_MAX 512        /* FujiNet packets shown */
 
 /* The console RAM dump: a header line, then 16 bytes a line. */
 #define RAM_HEADER @"       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F\n"
@@ -163,7 +165,7 @@ static BOOL isF12(NSEvent *event)
 }
 @end
 
-@interface SMSDebuggerWindow ()
+@interface SMSDebuggerWindow () <NSTabViewDelegate>
 - (instancetype)initWithSession:(smssession *)session;
 - (void)refreshAll;
 @end
@@ -214,6 +216,11 @@ static BOOL isF12(NSEvent *event)
     NSStackView *_bpList;
 
     NSTextView *_cart;
+
+    NSTextField *_fujiNote;
+    NSTextView *_fujiText, *_fujiState;
+    uint64_t _fujiLast;
+    int _fujiCount;
 }
 
 #define NUM_FILE_KINDS 7
@@ -226,9 +233,9 @@ static NSString *const kFileNames[NUM_FILE_KINDS] = {
 };
 
 /* SMS_DEBUGGER_TAB takes an index or one of these. */
-#define NUM_TABS 7
+#define NUM_TABS 8
 static const char *const kTabNames[NUM_TABS] = {
-    "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart"
+    "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart", "fujinet"
 };
 
 /* ---- helpers --------------------------------------------------------------- */
@@ -303,6 +310,24 @@ static void setTextKeepingPlace(NSTextView *view, NSString *text)
     const NSPoint at = scroll ? scroll.contentView.bounds.origin : NSZeroPoint;
     view.string = text;
     if (scroll) [scroll.contentView scrollToPoint:at];
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+static BOOL atEnd(NSTextView *view)
+{
+    NSScrollView *scroll = view.enclosingScrollView;
+    if (!scroll) return YES;
+    return NSMaxY(scroll.contentView.documentVisibleRect) >= NSHeight(view.frame) - 4;
+}
+
+/* A log's text where its reader left it, or, following, at its end. */
+static void setLogText(NSTextView *view, NSString *text, BOOL follow)
+{
+    if (![view.string isEqualToString:text]) {
+        if (follow) view.string = text;
+        else setTextKeepingPlace(view, text);
+    }
+    if (follow) [view scrollRangeToVisible:NSMakeRange(view.string.length, 0)];
 }
 
 static NSColor *colorFromXrgb(uint32_t rgb)
@@ -401,6 +426,7 @@ static void fill(NSStackView *stack, NSView *view)
     if (!self) return nil;
     _session = session;
     _dbg = smssession_debugger(session);
+    _fujiCount = -1;
     _viewPx = calloc(SMSDEBUG_VIEW_MAX_PIXELS, sizeof *_viewPx);
     _history = [NSMutableArray array];
     [self buildWindow];
@@ -441,7 +467,14 @@ static void fill(NSStackView *stack, NSView *view)
         if ([_tabs indexOfTabViewItem:_tabs.selectedTabViewItem] == TAB_VDP) [self refreshVdp];
         [self refreshSound];
         [self refreshCart];
+        if ([_tabs indexOfTabViewItem:_tabs.selectedTabViewItem] == TAB_FUJINET) [self refreshFujinet:NO];
     }
+}
+
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    (void)tabView;
+    if ([_tabs indexOfTabViewItem:item] == TAB_FUJINET) [self refreshFujinet:NO];
 }
 
 /* ---- construction ------------------------------------------------------------ */
@@ -646,6 +679,44 @@ static void fill(NSStackView *stack, NSView *view)
     return scroll;
 }
 
+/* The packets left (a note and Clear over them), the cartridge's mailbox
+ * right. */
+- (NSView *)buildFujinet
+{
+    _fujiNote = [self label:@""];
+    _fujiNote.textColor = NSColor.secondaryLabelColor;
+    _fujiNote.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_fujiNote setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_fujiNote setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *row = hstack(@[_fujiNote, [self button:@"Clear" action:@selector(fujiClear:)]]);
+
+    NSScrollView *fujiScroll, *stateScroll;
+    _fujiText = monoView(&fujiScroll, NO);
+    _fujiState = monoView(&stateScroll, NO);
+    NSTextField *title = [self label:@"FujiBus packets (SLIP-decoded)"];
+    title.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    NSStackView *left = vstack(@[title, row, fujiScroll]);
+    left.distribution = NSStackViewDistributionFill;   /* the log takes the column's height */
+    fill(left, row);
+    fill(left, fujiScroll);
+    NSTextField *stateTitle = [self label:@"The cartridge's mailbox"];
+    stateTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    NSStackView *right = vstack(@[stateTitle, stateScroll]);
+    right.distribution = NSStackViewDistributionFill;
+    fill(right, stateScroll);
+
+    NSStackView *h = hstack(@[left, right]);
+    h.alignment = NSLayoutAttributeTop;
+    h.spacing = 12;
+    [left.widthAnchor constraintGreaterThanOrEqualToConstant:520].active = YES;
+    [right.widthAnchor constraintEqualToConstant:320].active = YES;
+    [left.heightAnchor constraintEqualToAnchor:h.heightAnchor].active = YES;
+    [right.heightAnchor constraintEqualToAnchor:h.heightAnchor].active = YES;
+    return h;
+}
+
 - (void)buildWindow
 {
     _window = [[DebuggerPanelWindow alloc]
@@ -693,7 +764,7 @@ static void fill(NSStackView *stack, NSView *view)
     NSArray *pages = @[ @[@"Prompt", [self buildPrompt]], @[@"CPU & RAM", [self buildCpu]],
                         @[@"Disassembly", [self buildDisasm]], @[@"VDP", [self buildVdp]],
                         @[@"Sound & I/O", [self buildSound]], @[@"Breakpoints", [self buildBreaks]],
-                        @[@"Cart", [self buildCart]] ];
+                        @[@"Cart", [self buildCart]], @[@"FujiNet", [self buildFujinet]] ];
     for (NSArray *page in pages) {
         NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:page[0]];
         item.label = page[0];
@@ -716,6 +787,7 @@ static void fill(NSStackView *stack, NSView *view)
         if (t < 0 && tab[0] >= '0' && tab[0] <= '9') t = atoi(tab);
         if (t >= 0 && t < (int)_tabs.numberOfTabViewItems) [_tabs selectTabViewItemAtIndex:t];
     }
+    _tabs.delegate = self;
 
     NSStackView *root = vstack(@[toolbar, _tabs]);
     root.edgeInsets = NSEdgeInsetsMake(8, 8, 8, 8);
@@ -726,6 +798,13 @@ static void fill(NSStackView *stack, NSView *view)
 }
 
 /* ---- actions ------------------------------------------------------------------ */
+
+- (void)fujiClear:(id)sender
+{
+    (void)sender;
+    smsdebug_fujinet_trace_clear(_dbg);
+    [self refreshFujinet:YES];
+}
 
 - (void)toggleRun:(id)sender
 {
@@ -1249,6 +1328,44 @@ static void fill(NSStackView *stack, NSView *view)
     setTextKeepingPlace(_cart, s);
 }
 
+/* The packet log is rebuilt only when it changed: a new packet, or a
+ * repeat (which moves the newest serial on). */
+- (void)refreshFujinet:(BOOL)force
+{
+    static smsdebug_fuji_packet p[TRACE_MAX];
+    static char state[2048];
+    char status[128];
+    int n = smsdebug_fujinet_trace(_dbg, p, TRACE_MAX);
+    if (n < 0) n = 0;
+
+    if (!smssession_fujinet_running(_session)) {
+        _fujiNote.stringValue = @"FujiNet is off (Settings ▸ FujiNet).";
+    } else {
+        smssession_cart_status(_session, status, (int)sizeof status);
+        _fujiNote.stringValue = [NSString stringWithFormat:@"FujiNet is on. Cartridge: %@.", stripControl(status)];
+    }
+    state[0] = '\0';
+    smsdebug_fujinet_state(_dbg, state, (int)sizeof state);
+    setTextKeepingPlace(_fujiState, stripControl(state));
+
+    if (!force && n == _fujiCount && (n == 0 || p[n - 1].serial == _fujiLast)) return;
+    _fujiCount = n;
+    _fujiLast = n > 0 ? p[n - 1].serial : 0;
+    const BOOL follow = force || atEnd(_fujiText);
+    NSMutableString *s = [NSMutableString string];
+    for (int i = 0; i < n; i++) {
+        if (i) [s appendString:@"\n"];
+        [s appendString:[NSString stringWithUTF8String:p[i].text] ?: @""];
+        if (p[i].repeat > 1) [s appendFormat:@" ×%u", p[i].repeat];
+        [s appendString:@"\n     "];
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            [s appendFormat:@"%02X ", p[i].data[k]];
+        if (p[i].nbytes > (int)sizeof p[i].data) [s appendString:@"…"];
+    }
+    if (n == 0) [s appendString:@"(no FujiBus packets since the trace was cleared)"];
+    setLogText(_fujiText, s, follow);
+}
+
 - (void)refreshAll
 {
     [self refreshStatus];
@@ -1259,5 +1376,6 @@ static void fill(NSStackView *stack, NSView *view)
     [self refreshSound];
     [self refreshBps];
     [self refreshCart];
+    [self refreshFujinet:NO];
 }
 @end

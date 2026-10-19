@@ -129,7 +129,9 @@ void session_gamepad_apply(struct smssession *s, int port, int act, int down);
 void session_gamepad_event(struct smssession *s, const char *text);
 
 /* debug.c: the session tells the debugger when the machine goes away and
- * comes back (a power cycle replaces it). */
+ * comes back (a power cycle replaces it), and starts the FujiNet trace
+ * before the first. */
+void smsdebug_trace_fujinet(struct smssession *s);
 void smsdebug_before_power_cycle(struct smssession *s);
 void smsdebug_after_power_cycle(struct smssession *s);
 void smsdebug_destroy(struct smssession *s);

@@ -1,9 +1,9 @@
 /*
  * Debugger window (Win32) over the Z80 / VDP debugger engine, via
  * core/include/smsdebug.h. Mirrors the GTK and Qt debuggers tab for tab --
- * Prompt, CPU & RAM, Disassembly, VDP, Sound & I/O, Breakpoints, Cart --
- * built from plain common controls, with the disassembly, the VDP picture
- * and the CRAM swatches drawn by hand.
+ * Prompt, CPU & RAM, Disassembly, VDP, Sound & I/O, Breakpoints, Cart,
+ * FujiNet -- built from plain common controls, with the disassembly, the
+ * VDP picture and the CRAM swatches drawn by hand.
  *
  * The engine only exists while this window is showing: showing it attaches
  * (which stops the machine, as on every sibling) and hiding it detaches,
@@ -20,6 +20,7 @@
 #include <commdlg.h>
 #include <windowsx.h>
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,7 @@
 #define DISASM_MAX 96        /* rows fetched at most; the view shows what fits */
 #define MAX_BPS 128
 #define HISTORY_MAX 64
+#define TRACE_MAX 512        /* FujiNet packets shown */
 #define GUTTER_W 18          /* the disassembly's breakpoint column */
 #define COMMENT_COL 62       /* where a disassembly line's comment starts, in characters */
 
@@ -40,7 +42,7 @@
 
 enum {
     PAGE_PROMPT = 0, PAGE_CPU, PAGE_DISASM, PAGE_VDP, PAGE_SOUND, PAGE_BREAKS, PAGE_CART,
-    PAGE_COUNT
+    PAGE_FUJINET, PAGE_COUNT
 };
 
 #define NREGS  17
@@ -61,6 +63,7 @@ enum {
     IDC_BP_LIST, IDC_BP_TYPE, IDC_BP_START, IDC_BP_END, IDC_BP_COND, IDC_BP_ADD,
     IDC_BP_REMOVE, IDC_BP_ENABLE, IDC_BP_CLEAR,
     IDC_CART,
+    IDC_FUJI_NOTE, IDC_FUJI_CLEAR, IDC_FUJI_TEXT, IDC_FUJI_STATE,
     IDC_SAVE_KIND0, IDC_SAVE_KIND_LAST = IDC_SAVE_KIND0 + NSAVE - 1,
     IDC_SYMS_CART, IDC_SYMS_FILE,
     IDC_LABEL_FIRST
@@ -87,6 +90,10 @@ typedef struct {
     HWND bp_add, bp_remove, bp_enable, bp_clear;
 
     HWND cart;
+
+    HWND fuji_title, fuji_note, fuji_clear, fuji_text, state_title, fuji_state;
+    uint64_t fuji_last;
+    int fuji_count;
 
     HFONT mono, ui;
     int mono_w, mono_h;        /* the mono font's cell, for the hand-drawn views */
@@ -135,7 +142,7 @@ static const int kRegIds[NREGS] = { SMS_REG_PC, SMS_REG_SP, SMS_REG_AF, SMS_REG_
 
 /* The page names SMS_DEBUGGER_TAB accepts, by page. */
 static const char *const kPageNames[PAGE_COUNT] = { "prompt", "cpu", "disassembly", "vdp", "sound",
-                                                    "breakpoints", "cart" };
+                                                    "breakpoints", "cart", "fujinet" };
 
 /* ---- helpers ---------------------------------------------------------------- */
 
@@ -184,6 +191,74 @@ static void append_text_lf(HWND h, const char *text)
 }
 
 static void edit_text(HWND h, char *out, int outsz) { GetWindowTextA(h, out, outsz); }
+
+static size_t addf(char *s, size_t len, size_t cap, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+    if (len >= cap) return len;
+    va_start(ap, fmt);
+    n = vsnprintf(s + len, cap - len, fmt, ap);
+    va_end(ap);
+    if (n < 0) return len;
+    return len + (size_t)n < cap ? len + (size_t)n : cap - 1;
+}
+
+/* The FujiNet page shows the engine's UTF-8 (arrows, the x of a repeat,
+ * an ellipsis): its note and log are Unicode controls, set as wide text. */
+static wchar_t *wide_view_text(const char *text)
+{
+    size_t n = strlen(text), i, o = 0;
+    char *buf = malloc(n * 2 + 1);
+    wchar_t *w = NULL;
+    int wn;
+    if (!buf) return NULL;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\n') { buf[o++] = '\r'; buf[o++] = '\n'; }
+        else if (c >= 0x20 || c == '\t') buf[o++] = (char)c;
+    }
+    buf[o] = '\0';
+    wn = MultiByteToWideChar(CP_UTF8, 0, buf, -1, NULL, 0);
+    if (wn > 0 && (w = malloc((size_t)wn * sizeof *w)) != NULL)
+        MultiByteToWideChar(CP_UTF8, 0, buf, -1, w, wn);
+    free(buf);
+    return w;
+}
+
+/* A label set only when it changed (no flicker on the live refresh). */
+static void set_label(HWND h, const char *utf8)
+{
+    wchar_t cur[512], w[512];
+    w[0] = 0;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, 512);
+    w[511] = 0;
+    GetWindowTextW(h, cur, 512);
+    if (wcscmp(cur, w) != 0) SetWindowTextW(h, w);
+}
+
+/* Whether a log's reader is at its end (it then follows new lines). */
+static int edit_at_end(debugger *d, HWND h)
+{
+    RECT c;
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    const int count = (int)SendMessageW(h, EM_GETLINECOUNT, 0, 0);
+    GetClientRect(h, &c);
+    return first + (d->mono_h > 0 && c.bottom > d->mono_h ? c.bottom / d->mono_h : 1) >= count;
+}
+
+/* Replaces a log's text where the reader left it, or, following, at its
+ * end. */
+static void set_text_at(HWND h, const char *text, int follow)
+{
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    wchar_t *w = wide_view_text(text);
+    if (!w) return;
+    SetWindowTextW(h, w);
+    if (follow) SendMessageW(h, EM_LINESCROLL, 0, SendMessageW(h, EM_GETLINECOUNT, 0, 0));
+    else SendMessageW(h, EM_LINESCROLL, 0, first - (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0));
+    free(w);
+}
 
 /* $hex, 0xhex, #dec, or bare hex, as the prompt reads numbers. */
 static int parse_num(const char *text, long *out)
@@ -541,6 +616,46 @@ static void refresh_cart(debugger *d)
     set_text_lf_keep(d->cart, s);
 }
 
+/* The packet log is rebuilt only when it changed: a new packet, or a
+ * repeat (which moves the newest serial on). */
+static void refresh_fujinet(debugger *d, int force)
+{
+    static smsdebug_fuji_packet p[TRACE_MAX];
+    static char t[TRACE_MAX * 320 + 128];
+    static char state[2048];
+    char note[200], status[128];
+    size_t len = 0;
+    int n = smsdebug_fujinet_trace(d->dbg, p, TRACE_MAX), i, follow;
+
+    if (!smssession_fujinet_running(d->session)) {
+        snprintf(note, sizeof note, "FujiNet is off (Settings \xe2\x96\xb8 FujiNet).");
+    } else {
+        smssession_cart_status(d->session, status, sizeof status);
+        snprintf(note, sizeof note, "FujiNet is on. Cartridge: %s.", status);
+    }
+    set_label(d->fuji_note, note);
+    smsdebug_fujinet_state(d->dbg, state, sizeof state);
+    set_text_lf_keep(d->fuji_state, state);
+    if (n < 0) n = 0;
+
+    if (!force && n == d->fuji_count && (n == 0 || p[n - 1].serial == d->fuji_last)) return;
+    follow = force || d->fuji_count < 0 || edit_at_end(d, d->fuji_text);
+    d->fuji_count = n;
+    d->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    t[0] = '\0';
+    for (i = 0; i < n; i++) {
+        int k;
+        len = addf(t, len, sizeof t, "%s%s", i ? "\n" : "", p[i].text);
+        if (p[i].repeat > 1) len = addf(t, len, sizeof t, " \xc3\x97%u", p[i].repeat);
+        len = addf(t, len, sizeof t, "\n     ");
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            len = addf(t, len, sizeof t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data) len = addf(t, len, sizeof t, "\xe2\x80\xa6");
+    }
+    if (n == 0) len = addf(t, len, sizeof t, "(no FujiBus packets since the trace was cleared)");
+    set_text_at(d->fuji_text, t, follow);
+}
+
 static void refresh_all(debugger *d)
 {
     refresh_status(d);
@@ -551,6 +666,7 @@ static void refresh_all(debugger *d)
     refresh_sound(d);
     refresh_bps(d);
     refresh_cart(d);
+    refresh_fujinet(d, 0);
 }
 
 /* ---- actions ------------------------------------------------------------------ */
@@ -1135,7 +1251,7 @@ static void build_controls(debugger *d)
 {
     TCITEMA item;
     static const char *const tabs[PAGE_COUNT] = { "Prompt", "CPU && RAM", "Disassembly", "VDP",
-                                                  "Sound && I/O", "Breakpoints", "Cart" };
+                                                  "Sound && I/O", "Breakpoints", "Cart", "FujiNet" };
     static const char *const flag_names[NFLAGS] = { "S", "Z", "H", "P/V", "N", "C" };
     static const char *const views[4] = { "Name table", "Tiles", "Sprites", "Palette" };
     static const char *const pals[2] = { "Background", "Sprites" };
@@ -1237,6 +1353,21 @@ static void build_controls(debugger *d)
 
     /* Cart */
     d->cart = mono_view(d, IDC_CART, 0);
+
+    /* FujiNet: the note and the log are Unicode (see wide_view_text) */
+    d->fuji_title = label(d, "FujiBus packets (SLIP-decoded)");
+    d->fuji_note = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | SS_LEFT | SS_ENDELLIPSIS, 0, 0, 10, 10, d->hwnd,
+                                   (HMENU)(INT_PTR)IDC_FUJI_NOTE, inst, NULL);
+    SendMessageW(d->fuji_note, WM_SETFONT, (WPARAM)d->ui, TRUE);
+    d->fuji_clear = button(d, "Clear", IDC_FUJI_CLEAR);
+    d->fuji_text = CreateWindowExW(0, L"EDIT", L"",
+                                   WS_CHILD | WS_BORDER | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY |
+                                       ES_AUTOVSCROLL,
+                                   0, 0, 10, 10, d->hwnd, (HMENU)(INT_PTR)IDC_FUJI_TEXT, inst, NULL);
+    SendMessageW(d->fuji_text, WM_SETFONT, (WPARAM)d->mono, TRUE);
+    SendMessageW(d->fuji_text, EM_SETLIMITTEXT, 0, 0);
+    d->state_title = label(d, "The cartridge's mailbox");
+    d->fuji_state = mono_view(d, IDC_FUJI_STATE, 0);
 }
 
 static void show_page(debugger *d, int page)
@@ -1250,6 +1381,7 @@ static void show_page(debugger *d, int page)
                    d->cram_val_label, d->cram_val };
     HWND brk[] = { d->bp_list, d->bp_type, d->bp_start_label, d->bp_start, d->bp_end_label, d->bp_end,
                    d->bp_cond_label, d->bp_cond, d->bp_add, d->bp_remove, d->bp_enable, d->bp_clear };
+    HWND fuji[] = { d->fuji_title, d->fuji_note, d->fuji_clear, d->fuji_text, d->state_title, d->fuji_state };
     size_t i;
     d->page = page;
 #define SHOW(arr, p) for (i = 0; i < sizeof(arr) / sizeof((arr)[0]); i++) ShowWindow((arr)[i], page == (p) ? SW_SHOW : SW_HIDE)
@@ -1263,6 +1395,7 @@ static void show_page(debugger *d, int page)
     ShowWindow(d->sound, page == PAGE_SOUND ? SW_SHOW : SW_HIDE);
     SHOW(brk, PAGE_BREAKS);
     ShowWindow(d->cart, page == PAGE_CART ? SW_SHOW : SW_HIDE);
+    SHOW(fuji, PAGE_FUJINET);
 #undef SHOW
 }
 
@@ -1371,6 +1504,19 @@ static void layout(debugger *d)
 
     /* Cart */
     MoveWindow(d->cart, px, py, pw, ph, TRUE);
+
+    /* FujiNet: the packets left (a note and Clear over them), the mailbox
+     * right */
+    {
+        const int rw = pw / 3 > 320 ? 320 : pw / 3 > 220 ? pw / 3 : 220;
+        const int lw = pw - rw - 12;
+        MoveWindow(d->fuji_title, px, py, lw, 18, TRUE);
+        MoveWindow(d->fuji_clear, px + lw - 70, py + 22, 70, 26, TRUE);
+        MoveWindow(d->fuji_note, px, py + 26, lw - 78, 18, TRUE);
+        MoveWindow(d->fuji_text, px, py + 54, lw, ph - 54, TRUE);
+        MoveWindow(d->state_title, px + lw + 12, py, rw, 18, TRUE);
+        MoveWindow(d->fuji_state, px + lw + 12, py + 22, rw, ph - 22, TRUE);
+    }
 }
 
 /* ---- attach / detach -------------------------------------------------------------- */
@@ -1443,6 +1589,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 else if (d->page == PAGE_SOUND) refresh_sound(d);
                 else if (d->page == PAGE_BREAKS) refresh_bps(d);
                 else if (d->page == PAGE_CART) refresh_cart(d);
+                else if (d->page == PAGE_FUJINET) refresh_fujinet(d, 0);
             }
         }
         return 0;
@@ -1459,6 +1606,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (((LPNMHDR)lp)->code == (UINT)TCN_SELCHANGE) {
             show_page(d, (int)SendMessageA(d->tabs, TCM_GETCURSEL, 0, 0));
             layout(d);
+            if (d->page == PAGE_FUJINET) refresh_fujinet(d, 0);
             return 0;
         }
         break;
@@ -1466,7 +1614,8 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == IDC_RUN) { draw_run_button(d, (const DRAWITEMSTRUCT *)lp); return TRUE; }
         break;
     case WM_CTLCOLORSTATIC:
-        if ((HWND)lp == d->status || (HWND)lp == d->beam || (HWND)lp == d->disasm_hint) {
+        if ((HWND)lp == d->status || (HWND)lp == d->beam || (HWND)lp == d->disasm_hint ||
+            (HWND)lp == d->fuji_note) {
             SetTextColor((HDC)wp, GetSysColor(COLOR_GRAYTEXT));
             SetBkColor((HDC)wp, GetSysColor(COLOR_BTNFACE));
             return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
@@ -1531,6 +1680,10 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             refresh_bps(d);
             refresh_disasm(d);
             return 0;
+        case IDC_FUJI_CLEAR:
+            smsdebug_fujinet_trace_clear(d->dbg);
+            refresh_fujinet(d, 1);
+            return 0;
         case IDCANCEL:
             detach_and_hide(d);
             return 0;
@@ -1571,7 +1724,7 @@ static void register_class(HINSTANCE inst, const char *name, WNDPROC proc, HBRUS
 }
 
 /* SMS_DEBUGGER_TAB: a page number, or its name (prompt, cpu, disassembly,
- * vdp, sound, breakpoints, cart). */
+ * vdp, sound, breakpoints, cart, fujinet). */
 static int page_from_env(void)
 {
     const char *tab = getenv("SMS_DEBUGGER_TAB");
@@ -1614,6 +1767,7 @@ void sms_debugger_show(HWND parent, smssession *session)
     if (!d) return;
     d->session = session;
     d->dbg = smssession_debugger(session);
+    d->fuji_count = -1;
     d->pic_px = calloc(SMSDEBUG_VIEW_MAX_PIXELS, sizeof *d->pic_px);
     g_dbg = d;
 

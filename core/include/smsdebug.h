@@ -8,7 +8,9 @@
  * The engine only engages while a window holds it attached:
  * smsdebug_attach() when the window opens -- which also stops the machine,
  * as on every sibling -- and smsdebug_detach() when it closes, which lets the
- * machine run on at full speed with no hook installed.
+ * machine run on at full speed with no hook installed. The FujiNet trace is
+ * the exception: it records from session start, so it shows what happened
+ * before anyone opened a window.
  *
  * Calls are safe from the UI thread at any time. Inspection is meant for the
  * stopped state; while running it answers with whatever is current.
@@ -248,6 +250,23 @@ typedef struct {
 void smsdebug_cart_get(smsdebug *d, smsdebug_cart *out);
 /* One line: "FujiNet cartridge: CONFIG, link up". */
 int  smsdebug_cart_info(smsdebug *d, char *dst, int dstsz);
+
+/* ---- FujiNet: the cartridge's socket, as FujiBus packets ------------------------ */
+typedef struct {
+    uint64_t serial;
+    int      to_host;       /* 1: FujiNet -> SMS, 0: SMS -> FujiNet */
+    int      device, command, length;   /* from the FujiBus header, -1 if short */
+    int      nbytes;
+    uint8_t  data[64];      /* the decoded packet's first bytes */
+    char     text[96];      /* "SMS -> FujiNet 70 F4 READ HOST SLOTS (6 bytes)" */
+    uint32_t repeat;        /* the same exchange back to back, shown "xN" */
+} smsdebug_fuji_packet;
+/* Recorded from session start, attached or not. The newest `max`, oldest
+ * first; returns the count. */
+int  smsdebug_fujinet_trace(smsdebug *d, smsdebug_fuji_packet *out, int max);
+void smsdebug_fujinet_trace_clear(smsdebug *d);
+/* The cartridge's link and mailbox, as text lines. Returns length. */
+int  smsdebug_fujinet_state(smsdebug *d, char *dst, int dstsz);
 
 /* ---- breakpoints -------------------------------------------------------------- */
 typedef enum {

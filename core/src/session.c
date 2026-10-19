@@ -386,6 +386,7 @@ int smssession_start(smssession *s, const smssession_start_opts *opts)
     memset(s->pad_src, 0, sizeof s->pad_src);
     memset(s->sw_src, 0, sizeof s->sw_src);
     sms_host_release_all();
+    smsdebug_trace_fujinet(s);
 
     /* FujiNet FIRST: it listens and the cartridge dials in, so the listener
      * has to exist before the machine's first transaction or the CONFIG

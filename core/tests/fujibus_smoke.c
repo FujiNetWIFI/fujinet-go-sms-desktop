@@ -3,7 +3,8 @@
  * port, the CONFIG client boots, and the cartridge's link comes up. This is
  * the one test that proves the whole chain -- the cartridge device (core/sms/fujinet_cart.c)
  * and its transport, the RS232 PC runtime's BoIP listener, the port numbers and
- * the start ordering -- rather than any one piece.
+ * the start ordering -- rather than any one piece. The debugger's FujiNet
+ * trace, on from the start, has seen both sides of it.
  *
  * SKIPs (77) when no runtime library is available.
  *
@@ -15,6 +16,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "smsdebug.h"
 #include "smssession.h"
 #include "test_tmpdir.h"
 
@@ -33,11 +35,12 @@ static void sleep_ms(int ms)
 
 int main(void)
 {
+    static smsdebug_fuji_packet pk[512];
     char cfg[512], data[512], status[128], logbuf[4096];
     smssession_paths p;
     smssession *s;
     smssession_start_opts o;
-    int waited = 0, up = 0;
+    int waited = 0, up = 0, n, sent = 0, got = 0;
 
     test_tmpdir(cfg, sizeof cfg, "fcfg");
     test_tmpdir(data, sizeof data, "fdata");
@@ -76,6 +79,18 @@ int main(void)
     check(strstr(logbuf, "BoIP") != NULL || strstr(logbuf, "connected") != NULL || logbuf[0] != '\0',
           "the FujiNet console log has content");
     check(smssession_cart_booted_game(s) == 0, "nothing has been booted yet");
+    /* CONFIG's first transaction waits for its splash to go */
+    for (waited = 0; waited < 30000 && !(sent && got); waited += 100) {
+        n = smsdebug_fujinet_trace(smssession_debugger(s), pk, 512);
+        sent = got = 0;
+        for (int i = 0; i < n; i++) {
+            if (pk[i].to_host) got++;
+            else sent++;
+        }
+        if (!(sent && got)) sleep_ms(100);
+    }
+    printf("FujiNet trace after %d ms: %d sent, %d received\n", waited, sent, got);
+    check(sent > 0 && got > 0, "the FujiNet trace saw a request and a reply");
 
     /* reboot: the old link must die before the new one dials in (backlog 1) */
     check(smssession_reset_to_config(s) == 0, "reset to CONFIG");

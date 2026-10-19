@@ -18,6 +18,9 @@
  *     is closed and the transaction fails with FB_ENOLINK, so the next one
  *     reconnects (the cart's wait_link_ms port hook).
  *
+ * It also hands every frame sent and read to the debugger's FujiNet trace
+ * (fujitcp_set_trace).
+ *
  * SPDX-License-Identifier: BSD-3-Clause
  * (matches the staged fujitcp.c it mirrors; copyright-holders Thomas Cherryhomes)
  */
@@ -43,6 +46,7 @@ typedef int sock_t;
 #define SHUT_BOTH SHUT_RDWR
 #endif
 
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +73,27 @@ static _Atomic(sock_t) fd = BAD_SOCK;
 #ifdef _WIN32
 static int wsa_started = 0;
 #endif
+
+/* The debugger's tap; the lock makes removing it wait out a call. */
+static pthread_mutex_t trace_mtx = PTHREAD_MUTEX_INITIALIZER;
+static fujitcp_trace_fn trace_fn;
+static void *trace_user;
+
+void fujitcp_set_trace(fujitcp_trace_fn fn, void *user)
+{
+    pthread_mutex_lock(&trace_mtx);
+    trace_fn = fn;
+    trace_user = user;
+    pthread_mutex_unlock(&trace_mtx);
+}
+
+static void trace(int dir, const uint8_t *buf, size_t len)
+{
+    pthread_mutex_lock(&trace_mtx);
+    if (trace_fn)
+        trace_fn(trace_user, dir, buf, len);
+    pthread_mutex_unlock(&trace_mtx);
+}
 
 static uint64_t now_ms(void)
 {
@@ -228,6 +253,7 @@ static fb_status_t read_frame(uint8_t *buf, size_t cap, size_t *out_len, int sec
             buf[n++] = c;
             if (c == 0xC0 && ++ends == 2) {
                 *out_len = n;
+                trace(0, buf, n);
                 return FB_OK;
             }
         }
@@ -257,6 +283,7 @@ fb_status_t fujitcp_transact(uint8_t device, uint8_t command,
         fujitcp_close();
         return FB_ENOLINK;
     }
+    trace(1, req, reqlen);
 
     for (;;) {
         st = read_frame(raw, sizeof raw, &rawlen, secs);
@@ -281,6 +308,9 @@ void fujitcp_send_bare(uint8_t device, uint8_t command,
                                      sizeof frame);
     sock_t s = atomic_load(&fd);
 
-    if (n && s != BAD_SOCK)
-        send(s, (const char *)frame, (int)n, MSG_NOSIGNAL);
+    if (n && s != BAD_SOCK) {
+        int sent = (int)send(s, (const char *)frame, (int)n, MSG_NOSIGNAL);
+        if (sent > 0)
+            trace(1, frame, (size_t)sent);
+    }
 }

@@ -27,6 +27,8 @@ void smsdebug_power_down(smsdebug *d);
 void smsdebug_power_up(smsdebug *d);
 /* The opened cartridge, for symbols next to it ("" for CONFIG). */
 void smsdebug_set_cart_path(smsdebug *d, const char *path);
+/* Feed the FujiNet trace from the transport, from now on. */
+void smsdebug_fujinet_install(smsdebug *d);
 
 /* For the prompt (prompt.c). */
 symtab *smsdebug_symbols(smsdebug *d);

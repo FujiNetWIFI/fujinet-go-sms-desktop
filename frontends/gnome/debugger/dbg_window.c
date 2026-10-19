@@ -6,7 +6,8 @@
  * command history), the Z80 + console RAM, the disassembly with a
  * breakpoint gutter, the VDP (registers, the name table / tile / sprite /
  * palette views, the sprite table and the CRAM), the sound chips and I/O
- * ports, breakpoints, and the FujiNet cartridge. A toolbar carries the
+ * ports, breakpoints, the FujiNet cartridge, and FujiNet: every FujiBus
+ * packet on the cartridge's link, both ways, with hex. A toolbar carries the
  * stepping controls, symbol loading and file saves; the family's keys apply
  * (F5 run/stop, F7 step, F8 step over, Shift+F8 step out, F12 close).
  *
@@ -36,6 +37,7 @@
 #define NREGS 17
 #define RAM_BASE 0xC000
 #define RAM_SIZE 8192
+#define TRACE_MAX 512
 
 typedef struct {
     GtkWindow *win;
@@ -97,6 +99,12 @@ typedef struct {
 
     /* cart */
     GtkTextView *cart_text;
+
+    /* fujinet */
+    GtkLabel *fuji_note;
+    GtkTextView *fuji_text, *fuji_state;
+    uint64_t fuji_last;
+    int fuji_count;
 } DbgWin;
 
 static DbgWin *g_win;
@@ -114,29 +122,73 @@ static const struct { const char *name; int reg; int digits; } k_regs[NREGS] = {
 
 /* The tabs, in order, by the names SMS_DEBUGGER_TAB takes. */
 static const char *const k_tab_names[] = {
-    "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart",
+    "prompt", "cpu", "disassembly", "vdp", "sound", "breakpoints", "cart", "fujinet",
 };
+#define TAB_FUJINET 7         /* refreshed live only while it shows */
 
 /* ---- helpers -------------------------------------------------------------- */
+
+static GtkAdjustment *vadj(GtkTextView *view)
+{
+    GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(view));
+    return GTK_IS_SCROLLED_WINDOW(parent)
+        ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent)) : NULL;
+}
+
+/* A log (the FujiNet packets) follows its end while its reader is there.
+ * New text grows the view only once it is laid out (or its tab first
+ * shows), so the end is pinned whenever the view's height changes; whether
+ * to follow is decided as text arrives. */
+static gboolean following(GtkTextView *view)
+{
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(view), "follow")) != 0;
+}
+
+static void on_log_resized(GtkAdjustment *adj, gpointer view)
+{
+    if (following(view))
+        gtk_adjustment_set_value(adj, gtk_adjustment_get_upper(adj) -
+                                      gtk_adjustment_get_page_size(adj));
+}
+
+static void make_log(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    g_signal_connect(vadj(view), "changed", G_CALLBACK(on_log_resized), view);
+}
+
+/* Before new text: follow if the reader is at the end (or never looked). */
+static void log_note_reader(GtkTextView *view)
+{
+    GtkAdjustment *adj = vadj(view);
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(
+        gtk_adjustment_get_page_size(adj) <= 0.0 ||
+        gtk_adjustment_get_value(adj) + gtk_adjustment_get_page_size(adj) >=
+            gtk_adjustment_get_upper(adj) - 2.0));
+}
 
 /* Replaces a view's text where the reader left it: a refresh (a step, or
  * the live values twice a second) must not throw a scrolled RAM dump or
  * sprite table back to its top. The top line is noted and scrolled back to
- * once the new text is laid out (scroll_to_mark waits for that). */
-static void set_text(GtkTextView *view, const char *text)
+ * once the new text is laid out (scroll_to_mark waits for that). A log
+ * that is following goes to its end instead. */
+static void set_text_at(GtkTextView *view, const char *text, gboolean follow)
 {
     GtkTextBuffer *b = gtk_text_view_get_buffer(view);
-    GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(view));
-    GtkAdjustment *adj = GTK_IS_SCROLLED_WINDOW(parent)
-        ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent)) : NULL;
+    GtkAdjustment *adj = vadj(view);
     GtkTextIter it;
     int top = 0;
 
-    if (adj && gtk_adjustment_get_value(adj) > 0.0) {
+    if (!follow && adj && gtk_adjustment_get_value(adj) > 0.0) {
         gtk_text_view_get_line_at_y(view, &it, (int)gtk_adjustment_get_value(adj), NULL);
         top = gtk_text_iter_get_line(&it);
     }
     gtk_text_buffer_set_text(b, text, -1);
+    if (follow) {
+        g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+        if (adj) on_log_resized(adj, view);
+        return;
+    }
     if (top > 0) {
         GtkTextMark *mark;
         gtk_text_buffer_get_iter_at_line(b, &it, top);
@@ -144,6 +196,11 @@ static void set_text(GtkTextView *view, const char *text)
         gtk_text_view_scroll_to_mark(view, mark, 0.0, TRUE, 0.0, 0.0);
         gtk_text_buffer_delete_mark(b, mark);
     }
+}
+
+static void set_text(GtkTextView *view, const char *text)
+{
+    set_text_at(view, text, FALSE);
 }
 
 static void append_text(GtkTextView *view, GtkScrolledWindow *scroll, const char *text)
@@ -588,6 +645,47 @@ static void refresh_cart(DbgWin *w)
     set_text(w->cart_text, text);
 }
 
+/* The packet log is rebuilt only when it changed: a new packet, or a
+ * repeat (which moves the newest serial on). */
+static void refresh_fujinet(DbgWin *w, gboolean force)
+{
+    static smsdebug_fuji_packet p[TRACE_MAX];
+    static char state[2048];
+    char note[200], status[128];
+    GString *t;
+    int n = smsdebug_fujinet_trace(w->dbg, p, TRACE_MAX), i;
+
+    if (!smssession_fujinet_running(w->session)) {
+        g_strlcpy(note, "FujiNet is off (Preferences \xe2\x96\xb8 FujiNet).", sizeof note);
+    } else {
+        smssession_cart_status(w->session, status, sizeof status);
+        g_snprintf(note, sizeof note, "FujiNet is on. Cartridge: %s.", status);
+    }
+    gtk_label_set_text(w->fuji_note, note);
+    smsdebug_fujinet_state(w->dbg, state, sizeof state);
+    set_text(w->fuji_state, state);
+
+    if (!force && n == w->fuji_count && (n == 0 || p[n - 1].serial == w->fuji_last))
+        return;
+    w->fuji_count = n;
+    w->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    log_note_reader(w->fuji_text);
+    t = g_string_new(NULL);
+    for (i = 0; i < n; i++) {
+        int k;
+        g_string_append_printf(t, "%s%s", i ? "\n" : "", p[i].text);
+        if (p[i].repeat > 1) g_string_append_printf(t, " \xc3\x97%u", p[i].repeat);
+        g_string_append(t, "\n     ");
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            g_string_append_printf(t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data) g_string_append(t, "\xe2\x80\xa6");
+    }
+    if (n == 0)
+        g_string_append(t, "(no FujiBus packets since the trace was cleared)");
+    set_text_at(w->fuji_text, t->str, force || following(w->fuji_text));
+    g_string_free(t, TRUE);
+}
+
 static void bp_enable_toggled(GtkCheckButton *b, gpointer ud);
 static void bp_remove_clicked(GtkButton *b, gpointer ud);
 
@@ -678,6 +776,7 @@ static void refresh_all(DbgWin *w)
     refresh_io(w);
     refresh_bps(w);
     refresh_cart(w);
+    refresh_fujinet(w, FALSE);
 }
 
 static void attach_and_refresh(DbgWin *w);
@@ -708,6 +807,7 @@ static gboolean tick_refresh(gpointer ud)
         refresh_vdp(w);
         refresh_io(w);
         refresh_cart(w);
+        if (gtk_notebook_get_current_page(w->notebook) == TAB_FUJINET) refresh_fujinet(w, FALSE);
     }
     return G_SOURCE_CONTINUE;
 }
@@ -1090,6 +1190,20 @@ static void on_save(GtkButton *b, gpointer ud)
     g_object_unref(dlg);
 }
 
+static void on_fuji_clear(GtkButton *b, gpointer ud)
+{
+    DbgWin *w = ud;
+    (void)b;
+    smsdebug_fujinet_trace_clear(w->dbg);
+    refresh_fujinet(w, TRUE);
+}
+
+static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num, gpointer ud)
+{
+    (void)nb; (void)page;
+    if (num == TAB_FUJINET) refresh_fujinet(ud, FALSE);
+}
+
 static void hide_window(DbgWin *w)
 {
     smsdebug_detach(w->dbg);
@@ -1450,6 +1564,49 @@ static GtkWidget *build_cart(DbgWin *w)
     return padded(mono_view(&w->cart_text, FALSE));
 }
 
+/* The packets left (a note and Clear over them), the cartridge's mailbox right. */
+static GtkWidget *build_fujinet(DbgWin *w)
+{
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *clear = gtk_button_new_with_label("Clear");
+    GtkWidget *title;
+
+    w->fuji_note = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(w->fuji_note), "dim-label");
+    gtk_label_set_wrap(w->fuji_note, TRUE);
+    gtk_label_set_xalign(w->fuji_note, 0);
+    gtk_widget_set_hexpand(GTK_WIDGET(w->fuji_note), TRUE);
+    g_signal_connect(clear, "clicked", G_CALLBACK(on_fuji_clear), w);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(w->fuji_note));
+    gtk_box_append(GTK_BOX(row), clear);
+    title = gtk_label_new("FujiBus packets (SLIP-decoded)");
+    gtk_widget_add_css_class(title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(title), 0);
+    gtk_box_append(GTK_BOX(left), title);
+    gtk_box_append(GTK_BOX(left), row);
+    gtk_box_append(GTK_BOX(left), mono_view(&w->fuji_text, FALSE));
+    make_log(w->fuji_text);
+
+    title = gtk_label_new("The cartridge's mailbox");
+    gtk_widget_add_css_class(title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(title), 0);
+    gtk_box_append(GTK_BOX(right), title);
+    gtk_box_append(GTK_BOX(right), mono_view(&w->fuji_state, FALSE));
+
+    gtk_paned_set_start_child(GTK_PANED(paned), left);
+    gtk_paned_set_end_child(GTK_PANED(paned), right);
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), FALSE);
+    gtk_widget_set_size_request(left, 620, -1);
+    gtk_widget_set_size_request(right, 320, -1);
+    w->fuji_count = -1;
+    return padded(paned);
+}
+
 static void on_destroy(GtkWidget *widget, gpointer ud)
 {
     DbgWin *w = ud;
@@ -1526,9 +1683,11 @@ void sms_debugger_show(GtkWindow *parent, smssession *session)
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_io(w), gtk_label_new("Sound & I/O"));
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_breaks(w), gtk_label_new("Breakpoints"));
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_cart(w), gtk_label_new("Cart"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_fujinet(w), gtk_label_new("FujiNet"));
     gtk_box_append(GTK_BOX(root), notebook);
     tab = tab_from_env();
     if (tab >= 0) gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), tab);
+    g_signal_connect(notebook, "switch-page", G_CALLBACK(on_switch_page), w);
 
     overlay = adw_toast_overlay_new();
     w->toasts = ADW_TOAST_OVERLAY(overlay);

@@ -1,7 +1,7 @@
 /*
  * debug.c -- the session's side of the debugger: one engine per session
  * (core/debugger/debugger.c), told when a power cycle takes the machine
- * away and brings a new one up.
+ * away and brings a new one up, and fed FujiNet's traffic from the start.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,6 +17,13 @@ smsdebug *smsdebug_get(smssession *s)
     if (!s->debugger)
         s->debugger = smsdebug_create();
     return s->debugger;
+}
+
+/* The FujiNet trace is always on: it is cheap, and it is most useful about
+ * what happened before anyone thought to look. */
+void smsdebug_trace_fujinet(struct smssession *s)
+{
+    smsdebug_fujinet_install(smsdebug_get(s));
 }
 
 void smsdebug_before_power_cycle(struct smssession *s)
