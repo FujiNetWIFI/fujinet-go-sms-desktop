@@ -115,12 +115,16 @@ modules:
           # developer's own BIOS images beside it are copied in but never
           # embedded -- WITH_SMS_ROMS is OFF above, which the build's
           # no_embedded_roms checks hold it to.)
-      # Pinned exactly as cmake/Dependencies.cmake (FUJINET_COMMIT, the add-sms
-      # branch). sms_provide_dependency() skips its own fetch once it finds
-      # build.sh (the SENTINEL) already here.
-      - type: git
-        url: https://github.com/FujiNetWIFI/fujinet-firmware
-        commit: 8f7389de6bf387b8db55169a85b0fe56c91254e4
+      # Pinned exactly as cmake/Dependencies.cmake (FUJINET_COMMIT, from the
+      # add-sms branch). That branch was squash-merged (firmware #1840) and
+      # deleted, so no branch reaches the commit any more and a git source
+      # cannot fetch it; GitHub still serves its archive. The tree has no
+      # .git, so the FujiNet build's version reads 0000000.
+      # sms_provide_dependency() skips its own fetch once it finds build.sh
+      # (the SENTINEL) already here.
+      - type: archive
+        url: https://github.com/FujiNetWIFI/fujinet-firmware/archive/8f7389de6bf387b8db55169a85b0fe56c91254e4.tar.gz
+        sha256: 4c3065f471bad489e4059053d6698c969986113f4804734f64ce638343ff96bb
         dest: third_party/fujinet-firmware
       # Same reasoning: the sandboxed build step has no network access, but
       # tools/fujinet/build-fujinet-desktop.sh needs mbedTLS 3.x and
