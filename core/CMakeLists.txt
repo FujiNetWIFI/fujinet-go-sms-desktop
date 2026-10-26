@@ -91,7 +91,7 @@ target_compile_definitions(sms_core PRIVATE _GNU_SOURCE _DEFAULT_SOURCE)
 
 target_link_libraries(sms_core PUBLIC Threads::Threads)
 if(WIN32)
-  target_link_libraries(sms_core PUBLIC ws2_32)
+  target_link_libraries(sms_core PUBLIC ws2_32 winmm)
 else()
   target_link_libraries(sms_core PUBLIC m)
 endif()

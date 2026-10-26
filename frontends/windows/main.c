@@ -1,14 +1,15 @@
 /*
- * FujiNet Go SMS -- the Windows (Win32 + GDI) frontend.
+ * FujiNet Go SMS -- the Windows (Win32) frontend.
  *
- * No toolkit: a plain window, a menu bar, a status bar and StretchDIBits.
- * That is enough for a 268x240 framebuffer, and it keeps the artifact a
- * folder you copy rather than a runtime hunt.
+ * No toolkit: a plain window, a menu bar and a status bar, with the picture
+ * a child window drawn by display.c (Direct3D 11, GDI as the fallback). That
+ * keeps the artifact a folder you copy rather than a runtime hunt.
  *
  * Two Windows-specific things are load bearing:
  *
- *   DwmFlush() on a present thread is this platform's frame clock. There is
- *   no GdkFrameClock here, and a plain timer would beat against the panel.
+ *   The display's render thread is this platform's frame clock: it feeds
+ *   each vblank to the core (display.c). There is no GdkFrameClock here, and
+ *   a plain timer would beat against the panel.
  *
  *   WM_ACTIVATE releases every held key. Alt-tabbing away mid-jump and coming
  *   back to a character walking into a wall is the classic symptom of not
@@ -21,7 +22,6 @@
 
 #include <windows.h>
 #include <commctrl.h>
-#include <dwmapi.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +30,7 @@
 #include "smssession.h"
 #include "controllers/controller_window.h"
 #include "debugger/dbg_window.h"
+#include "display.h"
 #include "key_forward.h"
 #include "resource.h"
 
@@ -50,13 +51,7 @@
 static smssession *g_session;
 static HWND g_hwnd;
 static HWND g_statusbar;
-static uint32_t *g_fb;
-static int g_fb_height;
-static uint64_t g_serial;
-static BITMAPINFO g_bmi;
-static CRITICAL_SECTION g_fb_lock;
-static volatile LONG g_running = 1;
-static HANDLE g_present_thread;
+static HWND g_display;
 static int g_aspect = 1, g_smooth = 0, g_fullscreen = 0;   /* TV pixel aspect on */
 static WINDOWPLACEMENT g_placement;
 static int g_sysact_down[SMS_SYSACT_COUNT];
@@ -65,34 +60,6 @@ static char g_pad_notice[160];
 static DWORD g_pad_notice_until;
 static int g_tap_target = -1;    /* the console button a menu click is holding */
 static HBRUSH g_accent_brush;
-
-/* ---- the present thread: this platform's frame clock ---------------------- */
-
-static DWORD WINAPI present_thread(LPVOID arg)
-{
-    (void)arg;
-    while (InterlockedCompareExchange(&g_running, 1, 1)) {
-        LARGE_INTEGER t, f;
-        int h = 0;
-        /* Blocks until the compositor's next vblank; falls through at once
-         * if the DWM is off, and the core's wall-clock pacing takes over --
-         * which is the whole reason notify_vsync is advisory. */
-        if (FAILED(DwmFlush())) Sleep(8);
-        QueryPerformanceCounter(&t);
-        QueryPerformanceFrequency(&f);
-        smssession_notify_vsync(g_session,
-                                (int64_t)(t.QuadPart * 1000000000LL / f.QuadPart));
-        EnterCriticalSection(&g_fb_lock);
-        if (smssession_copy_frame(g_session, g_fb, &h, &g_serial)) {
-            g_fb_height = h;
-            LeaveCriticalSection(&g_fb_lock);
-            InvalidateRect(g_hwnd, NULL, FALSE);
-        } else {
-            LeaveCriticalSection(&g_fb_lock);
-        }
-    }
-    return 0;
-}
 
 /* ---- painting ------------------------------------------------------------- */
 
@@ -104,44 +71,13 @@ static int statusbar_height(void)
     return r.bottom - r.top;
 }
 
-/* The width of one console pixel over its height on a television: 8:7 on
- * NTSC; on PAL the VDP's 5.32 MHz dot clock against the 14.75 MHz
- * square-pixel rate, about 1.386. */
-static double tv_pixel_aspect(void)
-{
-    return smssession_refresh_rate(g_session) == 50 ? 14.75 / 5.3203424 / 2.0 : 8.0 / 7.0;
-}
-
-static void paint(HDC dc)
+/* The picture fills the client above the status bar. */
+static void layout_display(void)
 {
     RECT rc;
-    double want, w, h, sw, sh;
-    int fbh;
-
+    if (!g_display) return;
     GetClientRect(g_hwnd, &rc);
-    rc.bottom -= statusbar_height();
-    w = rc.right - rc.left;
-    h = rc.bottom - rc.top;
-    FillRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    if (w <= 0 || h <= 0) return;
-
-    EnterCriticalSection(&g_fb_lock);
-    fbh = g_fb_height;
-    if (fbh <= 0) { LeaveCriticalSection(&g_fb_lock); return; }
-
-    /* A television drew each Master System pixel wider than it is tall;
-     * "square" shows the framebuffer exactly. */
-    want = (double)SMSSESSION_FB_WIDTH / (double)fbh;
-    if (g_aspect) want *= tv_pixel_aspect();
-    if (w / h > want) { sh = h; sw = sh * want; }
-    else              { sw = w; sh = sw / want; }
-
-    /* The session's pixels are 0x00RRGGBB: exactly a 32-bit BI_RGB DIB. */
-    g_bmi.bmiHeader.biHeight = -fbh;   /* top-down */
-    SetStretchBltMode(dc, g_smooth ? HALFTONE : COLORONCOLOR);
-    StretchDIBits(dc, (int)((w - sw) / 2), (int)((h - sh) / 2), (int)sw, (int)sh,
-                  0, 0, SMSSESSION_FB_WIDTH, fbh, g_fb, &g_bmi, DIB_RGB_COLORS, SRCCOPY);
-    LeaveCriticalSection(&g_fb_lock);
+    MoveWindow(g_display, 0, 0, rc.right, rc.bottom - statusbar_height() > 0 ? rc.bottom - statusbar_height() : 0, TRUE);
 }
 
 /* ---- helpers -------------------------------------------------------------- */
@@ -604,7 +540,7 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 g_aspect = SendMessageA(GetDlgItem(hwnd, IDC_SET_ASPECT), CB_GETCURSEL, 0, 0) == 0;
                 smssession_set_int(g_session, "aspect", g_aspect ? 0 : 1);
                 if (m) CheckMenuItem(m, IDM_TV_ASPECT, MF_BYCOMMAND | (g_aspect ? MF_CHECKED : MF_UNCHECKED));
-                InvalidateRect(g_hwnd, NULL, TRUE);
+                sms_display_set_options(g_aspect, g_smooth);
             }
             return 0;
         case IDC_SET_AN_JOY:
@@ -920,24 +856,17 @@ static void toggle_fullscreen(HWND hwnd)
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
         g_fullscreen = 0;
     }
-    InvalidateRect(hwnd, NULL, TRUE);
+    layout_display();
 }
 
 static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC dc = BeginPaint(hwnd, &ps);
-        paint(dc);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
     case WM_ERASEBKGND:
-        return 1;
+        return 1;   /* the display child covers the client; no flash of black */
     case WM_SIZE:
         if (g_statusbar) SendMessageA(g_statusbar, WM_SIZE, 0, 0);
-        InvalidateRect(hwnd, NULL, FALSE);
+        layout_display();
         return 0;
     case WM_DRAWITEM:
         if (wp == IDC_STATUSBAR) { draw_status_dot((const DRAWITEMSTRUCT *)lp); return TRUE; }
@@ -1045,7 +974,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_aspect = !g_aspect;
             if (m) CheckMenuItem(m, IDM_TV_ASPECT, MF_BYCOMMAND | (g_aspect ? MF_CHECKED : MF_UNCHECKED));
             smssession_set_int(g_session, "aspect", g_aspect ? 0 : 1);
-            InvalidateRect(hwnd, NULL, TRUE);
+            sms_display_set_options(g_aspect, g_smooth);
             return 0;
         }
         case IDM_SMOOTH: {
@@ -1053,7 +982,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_smooth = !g_smooth;
             if (m) CheckMenuItem(m, IDM_SMOOTH, MF_BYCOMMAND | (g_smooth ? MF_CHECKED : MF_UNCHECKED));
             smssession_set_int(g_session, "smooth", g_smooth);
-            InvalidateRect(hwnd, NULL, TRUE);
+            sms_display_set_options(g_aspect, g_smooth);
             return 0;
         }
         case IDM_SETTINGS: show_settings((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE)); return 0;
@@ -1065,17 +994,20 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             ShellExecuteA(hwnd, "open", smssession_fujinet_webui_url(g_session), NULL, NULL, SW_SHOWNORMAL);
             return 0;
-        case IDM_ABOUT:
-            MessageBoxA(hwnd,
+        case IDM_ABOUT: {
+            char about[640];
+            snprintf(about, sizeof about,
                 APP_TITLE " " SMS_VERSION_STRING "\n\n"
                 "A Sega Master System with a built-in FujiNet.\n"
                 "The emulator is MAME's Master System drivers (BSD-3-Clause)\n"
                 "carried over to C around floooh's z80.h (zlib), with ymfm's\n"
                 "YM2413 (BSD-3-Clause), and the FujiNet firmware for the cartridge.\n\n"
                 "Copyright (C) 2026 Thomas Cherryhomes -- GPL-3.0-or-later\n"
-                "https://fujinet.online/",
-                "About " APP_TITLE, MB_ICONINFORMATION | MB_OK);
+                "https://fujinet.online/\n\nDisplay: %s",
+                sms_display_renderer());
+            MessageBoxA(hwnd, about, "About " APP_TITLE, MB_ICONINFORMATION | MB_OK);
             return 0;
+        }
         case IDM_EXIT: PostMessage(hwnd, WM_CLOSE, 0, 0); return 0;
         default: break;
         }
@@ -1119,7 +1051,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     (void)prev;
 
     InitCommonControlsEx(&icc);
-    InitializeCriticalSection(&g_fb_lock);
 
     g_session = smssession_new(NULL);
     if (!g_session) {
@@ -1127,19 +1058,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
                     APP_TITLE, MB_ICONERROR | MB_OK);
         return 1;
     }
-    g_fb = calloc((size_t)SMSSESSION_FB_WIDTH * SMSSESSION_FB_MAX_HEIGHT, sizeof *g_fb);
-    if (!g_fb) return 1;
     g_accent_brush = CreateSolidBrush(RGB((SMSSESSION_ACCENT_RGB >> 16) & 0xff,
                                           (SMSSESSION_ACCENT_RGB >> 8) & 0xff,
                                           SMSSESSION_ACCENT_RGB & 0xff));
-
-    memset(&g_bmi, 0, sizeof g_bmi);
-    g_bmi.bmiHeader.biSize = sizeof g_bmi.bmiHeader;
-    g_bmi.bmiHeader.biWidth = SMSSESSION_FB_WIDTH;
-    g_bmi.bmiHeader.biHeight = -SMSSESSION_FB_MAX_HEIGHT;
-    g_bmi.bmiHeader.biPlanes = 1;
-    g_bmi.bmiHeader.biBitCount = 32;
-    g_bmi.bmiHeader.biCompression = BI_RGB;
 
     /* "aspect": 0 (the default) the television's pixel aspect, 1 square --
      * the family's meaning, shared with the other frontends */
@@ -1172,6 +1093,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     g_statusbar = CreateWindowExA(0, STATUSCLASSNAMEA, "", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                   0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)IDC_STATUSBAR, inst, NULL);
     SendMessageA(g_statusbar, SB_SETPARTS, 2, (LPARAM)parts);
+    sms_display_set_options(g_aspect, g_smooth);
+    g_display = sms_display_create(g_hwnd, g_session);
+    layout_display();
     ShowWindow(g_hwnd, show);
 
     smssession_default_opts(g_session, &opts);
@@ -1205,8 +1129,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     if (env_on("SMS_OPEN_DEBUGGER")) sms_debugger_show(g_hwnd, g_session);
     if (env_on("SMS_OPEN_SETTINGS")) show_settings(inst);
 
-    g_present_thread = CreateThread(NULL, 0, present_thread, NULL, 0, NULL);
-
     while (GetMessage(&msg, NULL, 0, 0) > 0) {
         /* Before TranslateMessage, so the sub-windows' keys reach them
          * regardless of which child control has the focus. */
@@ -1216,15 +1138,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         DispatchMessage(&msg);
     }
 
-    InterlockedExchange(&g_running, 0);
-    if (g_present_thread) {
-        WaitForSingleObject(g_present_thread, 2000);
-        CloseHandle(g_present_thread);
-    }
+    sms_display_destroy();
     smssession_stop(g_session);
     smssession_free(g_session);
-    free(g_fb);
     DeleteObject(g_accent_brush);
-    DeleteCriticalSection(&g_fb_lock);
     return (int)msg.wParam;
 }

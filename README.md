@@ -14,7 +14,7 @@ desktop app. A member of the FujiNet Go desktop family
 | **Machines** | Master System and Master System II, NTSC and PAL; the Japanese Master System (YM2413 FM built in, the Rapid button); the Mark III, with or without the FM Sound Unit. No BIOS needed. |
 | **Cartridge** | The FujiNet SMS cartridge (`fujinet-firmware` `pico/sms`): the mailbox at `$B000`, the 2K loader page at `$B800`, 1 MB of SRAM on the cartridge's own `smsmap` mapper engine (Sega, Codemasters, the Korean mappers, Zemina, Nemesis, Janggun, 4 PAK), CONFIG baked in. Its protocol (`fujimail`), wire codec (`fujibus`), mapper engine and load sequence are the cartridge firmware's own sources, staged verbatim. |
 | **FujiNet** | The firmware's `RS232` PC target, built in-process as `libfujinet` and dialled by the cartridge over loopback (BoIP on **11508**, web admin on **11509**). |
-| **Frontends** | GNOME (GTK4/libadwaita), KDE (Qt6 Widgets), macOS (AppKit), Windows (Win32/GDI) — each with the display, a Controllers window, Preferences, a live FujiNet console log, and a debugger. |
+| **Frontends** | GNOME (GTK4/libadwaita), KDE (Qt6 Widgets), macOS (AppKit), Windows (Win32, Direct3D 11) — each with the display, a Controllers window, Preferences, a live FujiNet console log, and a debugger. |
 | **Packaging** | Per-frontend DEB/RPM/TGZ, two Flatpaks, a Windows (x86-64) zip and NSIS installer, and macOS bundles for Apple Silicon (arm64) and Intel (x86_64), all through GitHub Actions. |
 
 ## What it is

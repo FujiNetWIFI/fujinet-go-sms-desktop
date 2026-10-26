@@ -24,6 +24,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <mmsystem.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
 
 /* ---- the machine and its thread ---- */
 
@@ -387,13 +394,79 @@ static long ts_diff_ns(const struct timespec *a, const struct timespec *b)
     return (long)((a->tv_sec - b->tv_sec) * 1000000000L + (a->tv_nsec - b->tv_nsec));
 }
 
+#if defined(_WIN32)
+/* Windows paces the way a game does. winpthreads' nanosleep is Sleep(), which
+ * rounds up to the 15.6 ms scheduler tick, so frames came out in bursts
+ * (15.6, 15.6, 31.2 ms...) though their average rate was right. A
+ * high-resolution waitable timer (Windows 10 1803+) wakes within a fraction
+ * of a millisecond of the deadline; older systems get a 1 ms tick
+ * (timeBeginPeriod) and an ordinary waitable timer. The thread also joins
+ * MMCSS "Games", so a busy desktop doesn't make it late. */
+static HANDLE s_timer;
+static int s_period_set;
+
+static void pacing_begin(void)
+{
+    typedef HANDLE(WINAPI * av_fn)(LPCWSTR, LPDWORD);
+    HMODULE avrt = LoadLibraryW(L"avrt.dll");
+    av_fn av = avrt ? (av_fn)(void (*)(void))GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW") : NULL;
+    DWORD index = 0;
+    if (!av || !av(L"Games", &index))
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    s_timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                     TIMER_ALL_ACCESS);
+    if (!s_timer)
+    {
+        s_period_set = timeBeginPeriod(1) == TIMERR_NOERROR;
+        s_timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+    }
+}
+
+static void pacing_end(void)
+{
+    if (s_timer)
+    {
+        CloseHandle(s_timer);
+        s_timer = NULL;
+    }
+    if (s_period_set)
+    {
+        timeEndPeriod(1);
+        s_period_set = 0;
+    }
+}
+#else
+static void pacing_begin(void) {}
+static void pacing_end(void) {}
+#endif
+
 /* clock_nanosleep(TIMER_ABSTIME) is the right tool on POSIX, but it is a
  * no-op under mingw/Wine (the emulator then free-runs at thousands of fps
- * in a Windows build), and Darwin has no clock_nanosleep at all: both take
- * a plain relative nanosleep, which winpthreads honours. */
+ * in a Windows build), so Windows waits on its timer for the time remaining.
+ * Darwin has no clock_nanosleep at all, so macOS takes a relative
+ * nanosleep. */
 static void sleep_until(const struct timespec *next, const struct timespec *now)
 {
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32)
+    long remain = ts_diff_ns(next, now);
+    struct timespec rel;
+    if (remain <= 0)
+        return;
+    if (s_timer)
+    {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)(remain / 100); /* relative, 100 ns units */
+        if (SetWaitableTimer(s_timer, &due, 0, NULL, NULL, FALSE))
+        {
+            WaitForSingleObject(s_timer, INFINITE);
+            return;
+        }
+    }
+    rel.tv_sec = remain / 1000000000L;
+    rel.tv_nsec = remain % 1000000000L;
+    nanosleep(&rel, NULL);
+#elif defined(__APPLE__)
     long remain = ts_diff_ns(next, now);
     struct timespec rel;
     if (remain <= 0)
@@ -474,6 +547,7 @@ static void *machine_thread(void *arg)
     }
     atomic_store(&s_cart_up, true);
 
+    pacing_begin();
     clock_gettime(CLOCK_MONOTONIC, &next);
 
     while (!atomic_load(&s_stop_req))
@@ -549,6 +623,7 @@ static void *machine_thread(void *arg)
         run_lock_take();
     }
     pthread_mutex_unlock(&s_run_lock);
+    pacing_end();
     return NULL;
 }
 
