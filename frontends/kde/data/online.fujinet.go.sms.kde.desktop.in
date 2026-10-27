@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FujiNet Go SMS
+Name=FujiNet Go SMS (KDE)
 GenericName=Master System Emulator
 Comment=A Sega Master System with a built-in FujiNet
 Exec=fujinet-go-sms-kde %f
