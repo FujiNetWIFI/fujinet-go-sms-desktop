@@ -584,6 +584,10 @@ static void action_fujinet_config(GSimpleAction *a, GVariant *p, gpointer user_d
 {
     SMSWindow *self = user_data;
     (void)a; (void)p;
+    if (smssession_fujinet_external(self->session)) {
+        sms_window_toast(self, "FujiNet is external: use its own web UI");
+        return;
+    }
     if (!smssession_fujinet_running(self->session)) {
         sms_window_toast(self, "FujiNet is not running");
         return;
@@ -595,6 +599,10 @@ static void action_fujinet_log(GSimpleAction *a, GVariant *p, gpointer user_data
 {
     SMSWindow *self = user_data;
     (void)a; (void)p;
+    if (smssession_fujinet_external(self->session)) {
+        sms_window_toast(self, "FujiNet is external: see its own console");
+        return;
+    }
     sms_fujilog_show(GTK_WINDOW(self), self->session);
 }
 

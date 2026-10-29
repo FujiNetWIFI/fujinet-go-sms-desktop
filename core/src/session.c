@@ -175,6 +175,8 @@ void smssession_default_opts(smssession *s, smssession_start_opts *opts)
     opts->fm_unit_mutes_psg = smssession_get_int(s, "fm_unit_mutes_psg", 0);
     opts->analog_joystick = smssession_get_int(s, "analog_joystick", 1);
     opts->enable_fujinet = smssession_get_int(s, "enable_fujinet", 1);
+    opts->external_fujinet = smssession_get_int(s, "fujinet_external", 0);
+    opts->boip_connect = smssession_get_str(s, "fujinet_external_addr", NULL);
     opts->enable_audio = smssession_get_int(s, "enable_audio", 1);
     opts->enable_gamepad = smssession_get_int(s, "enable_gamepad", 1);
     opts->cart_path = smssession_get_str(s, "cart", NULL);
@@ -265,7 +267,6 @@ static int host_up(struct smssession *s, const char *cart_path)
     uint8_t *cart = NULL, *bios = NULL, *inst = NULL;
     uint32_t cart_len = 0, bios_len = 0;
     char mapper[64] = "";
-    char boip[32];
     char why[256];
     int rc;
 
@@ -288,13 +289,12 @@ static int host_up(struct smssession *s, const char *cart_path)
         inst = roms_load_instruments(s);
 
     /* The cartridge dials FujiNet's BoIP port -- the in-process runtime's,
-     * or a standalone fujinet-pc's when the runtime is switched off. A
-     * session whose FujiNet is disabled outright (fujinet_lib "", the tests)
-     * dials a closed port, so it can never pick up someone else's FujiNet. */
+     * or a standalone fujinet-pc's when the runtime is switched off or
+     * external. A session whose FujiNet is disabled outright (fujinet_lib "",
+     * the tests) dials a closed port, so it can never pick up someone else's
+     * FujiNet. */
     if (s->fujinet_disabled)
-        snprintf(boip, sizeof boip, "127.0.0.1:1");
-    else
-        snprintf(boip, sizeof boip, "127.0.0.1:%d", SMSSESSION_BOIP_PORT);
+        snprintf(s->boip_endpoint, sizeof s->boip_endpoint, "127.0.0.1:1");
     ho.model = (sms_model_t)s->opts.console;
     ho.bios = bios;
     ho.bios_size = bios_len;
@@ -304,7 +304,7 @@ static int host_up(struct smssession *s, const char *cart_path)
     ho.cart = cart;
     ho.cart_size = cart_len;
     ho.cart_mapper = mapper[0] ? mapper : NULL;
-    ho.boip_hostport = boip;
+    ho.boip_hostport = s->boip_endpoint;
     ho.cart_sync = getenv("SMS_CART_SYNC") != NULL;
 
     rc = sms_host_start(&ho);
@@ -368,6 +368,9 @@ static void adopt_opts(struct smssession *s, const smssession_start_opts *opts)
     } else
         s->cart_path[0] = '\0';
     s->opts.cart_path = s->cart_path[0] ? s->cart_path : NULL;
+    snprintf(s->boip_addr, sizeof s->boip_addr, "%s",
+             opts->boip_connect ? opts->boip_connect : "");
+    s->opts.boip_connect = s->boip_addr;
 }
 
 int smssession_start(smssession *s, const smssession_start_opts *opts)
@@ -388,11 +391,34 @@ int smssession_start(smssession *s, const smssession_start_opts *opts)
     sms_host_release_all();
     smsdebug_trace_fujinet(s);
 
+    /* An external FujiNet is dialed at the address the settings name; a bad
+     * address is an error, not a silent fall back to the built-in one. */
+    s->fujinet_external = 0;
+    snprintf(s->boip_endpoint, sizeof s->boip_endpoint, "127.0.0.1:%d",
+             SMSSESSION_BOIP_PORT);
+    if (s->opts.external_fujinet && !s->fujinet_disabled) {
+        char host[64];
+        int port;
+
+        if (smssession_parse_hostport(s->opts.boip_connect, host, sizeof host,
+                                      &port) != 0) {
+            session_set_error(s, "\"%s\" is not an address:port for the "
+                              "external FujiNet (example: 127.0.0.1:%d)",
+                              s->opts.boip_connect ? s->opts.boip_connect : "",
+                              SMSSESSION_BOIP_PORT);
+            return -1;
+        }
+        s->fujinet_external = 1;
+        snprintf(s->boip_endpoint, sizeof s->boip_endpoint, "%s:%d", host,
+                 port);
+    }
+
     /* FujiNet FIRST: it listens and the cartridge dials in, so the listener
      * has to exist before the machine's first transaction or the CONFIG
      * client boots reporting no link. Failing to start is NOT fatal (the
-     * cartridge also redials when a transaction finds the link down). */
-    if (s->opts.enable_fujinet && !s->fujinet_disabled) {
+     * cartridge also redials when a transaction finds the link down). An
+     * external FujiNet is someone else's to start. */
+    if (s->opts.enable_fujinet && !s->fujinet_disabled && !s->fujinet_external) {
         if (fujinet_start(s) == 0)
             fujinet_wait_for_boip(s, 3000);
     }
@@ -437,6 +463,7 @@ void smssession_stop(smssession *s)
     smsdebug_before_power_cycle(s);
     sms_host_stop();
     fujinet_stop(s);
+    s->fujinet_external = 0;
     s->running = 0;
 }
 
@@ -462,6 +489,8 @@ int smssession_restart(smssession *s)
     /* FujiNet or the device toggles change what runs beside the machine:
      * a full restart. Anything else is a machine option: a power cycle. */
     if (!!opts.enable_fujinet != !!s->opts.enable_fujinet ||
+        !!opts.external_fujinet != !!s->opts.external_fujinet ||
+        strcmp(opts.boip_connect ? opts.boip_connect : "", s->boip_addr) ||
         !!opts.enable_audio != !!s->opts.enable_audio ||
         !!opts.enable_gamepad != !!s->opts.enable_gamepad) {
         smssession_stop(s);
@@ -742,7 +771,75 @@ int smssession_fujinet_running(const smssession *s)
 
 const char *smssession_fujinet_webui_url(const smssession *s)
 {
-    return s->webui_url;
+    return s->fujinet_external ? "" : s->webui_url;
+}
+
+int smssession_parse_hostport(const char *text, char *host, int hostsz,
+                              int *port)
+{
+    char buf[80], *colon, *end;
+    const char *name = "127.0.0.1";
+    long num = SMSSESSION_BOIP_PORT;
+    size_t len, i;
+
+    if (!text) text = "";
+    while (*text == ' ' || *text == '\t') text++;
+    len = strlen(text);
+    while (len && (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+                   text[len - 1] == '\n' || text[len - 1] == '\r'))
+        len--;
+    if (len >= sizeof buf) return -1;
+    memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    if (len) {
+        colon = strrchr(buf, ':');
+        if (colon) {
+            *colon = '\0';
+            name = buf;
+            if (!*name) return -1;
+            text = colon + 1;
+        } else {
+            text = buf;
+        }
+        if (!*text) return -1;
+        num = strtol(text, &end, 10);
+        if (*end || num < 1 || num > 65535) return -1;
+        if (colon) {
+            /* A host name or an IPv4 literal: letters, digits, '-', '_' and
+             * '.'; a name of only digits and dots must be a whole address. */
+            int digits_only = 1, octet[4], used = 0, k;
+            for (i = 0; name[i]; i++) {
+                char ch = name[i];
+                int alnum = (ch >= '0' && ch <= '9') ||
+                            (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+                if (!alnum && ch != '-' && ch != '_' && ch != '.') return -1;
+                if (!(ch >= '0' && ch <= '9') && ch != '.') digits_only = 0;
+            }
+            if (name[0] == '.' || name[i - 1] == '.' || strstr(name, "..")) return -1;
+            if (digits_only) {
+                if (sscanf(name, "%d.%d.%d.%d%n", &octet[0], &octet[1],
+                           &octet[2], &octet[3], &used) != 4 || name[used])
+                    return -1;
+                for (k = 0; k < 4; k++)
+                    if (octet[k] < 0 || octet[k] > 255) return -1;
+            }
+        }
+    }
+    if ((int)strlen(name) >= hostsz) return -1;
+    memcpy(host, name, strlen(name) + 1);
+    *port = (int)num;
+    return 0;
+}
+
+int smssession_fujinet_external(const smssession *s)
+{
+    return s->fujinet_external;
+}
+
+const char *smssession_boip_endpoint(const smssession *s)
+{
+    return s->boip_endpoint[0] ? s->boip_endpoint : "127.0.0.1:11508";
 }
 
 int smssession_cart_link_up(smssession *s)

@@ -936,7 +936,12 @@ void DebuggerWindow::refreshFujinet(bool force)
     static smsdebug_fuji_packet p[512];
     static char state[2048];
     const int n = smsdebug_fujinet_trace(m_dbg, p, 512);
-    if (!smssession_fujinet_running(m_session)) {
+    if (smssession_fujinet_external(m_session)) {
+        char status[128];
+        smssession_cart_status(m_session, status, sizeof status);
+        m_fujiNote->setText(QStringLiteral("External FujiNet at %1. Cartridge: %2.")
+                                .arg(QString::fromUtf8(smssession_boip_endpoint(m_session)), QString::fromUtf8(status)));
+    } else if (!smssession_fujinet_running(m_session)) {
         m_fujiNote->setText(QStringLiteral("FujiNet is off (Preferences ▸ FujiNet)."));
     } else {
         char status[128];

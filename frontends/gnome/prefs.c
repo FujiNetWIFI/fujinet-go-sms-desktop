@@ -302,6 +302,36 @@ static GtkWidget *switch_row(PrefsState *state, const char *title,
     return row;
 }
 
+#define EXTERNAL_PLACEHOLDER "127.0.0.1:11508"
+
+/* The address field: valid text (or none, meaning 127.0.0.1:11508) is saved
+ * and marks the machine dirty; anything else is flagged and not saved. */
+static void addr_changed(GtkEditable *entry, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    const char *text = gtk_editable_get_text(entry);
+    char host[64];
+    int port;
+
+    if (smssession_parse_hostport(text, host, sizeof host, &port) != 0) {
+        gtk_widget_add_css_class(GTK_WIDGET(entry), "error");
+        return;
+    }
+    gtk_widget_remove_css_class(GTK_WIDGET(entry), "error");
+    if (g_strcmp0(smssession_get_str(state->session, "fujinet_external_addr", ""),
+                  text) == 0)
+        return;
+    smssession_set_str(state->session, "fujinet_external_addr", text);
+    state->dirty = TRUE;
+}
+
+static void external_toggled(GObject *row, GParamSpec *pspec, gpointer user_data)
+{
+    gtk_widget_set_sensitive(GTK_WIDGET(user_data),
+                             adw_switch_row_get_active(ADW_SWITCH_ROW(row)));
+    (void)pspec;
+}
+
 static GtkWidget *info_row(const char *title, const char *subtitle)
 {
     GtkWidget *row = adw_action_row_new();
@@ -380,7 +410,9 @@ static void on_open_webui(GtkButton *b, gpointer user_data)
     (void)b;
     if (!smssession_fujinet_running(state->session)) {
         adw_preferences_dialog_add_toast(ADW_PREFERENCES_DIALOG(state->dialog),
-                                         adw_toast_new("FujiNet is not running"));
+                                         adw_toast_new(smssession_fujinet_external(state->session)
+                                                       ? "FujiNet is external: use its own web UI"
+                                                       : "FujiNet is not running"));
         return;
     }
     sms_fujiconfig_show(GTK_WINDOW(state->window), state->session);
@@ -410,7 +442,7 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
     AdwPreferencesGroup *input = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     AdwPreferencesGroup *pads = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     AdwPreferencesGroup *fujinet = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
-    GtkWidget *import;
+    GtkWidget *import, *external, *addr;
 
     state->window = parent;
     state->session = session;
@@ -506,8 +538,26 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
                    "means no network and a link-down CONFIG (applied when "
                    "Preferences closes).",
                    "enable_fujinet", 1, 0));
+    external = switch_row(state, "Use external FujiNet",
+                          "Skip the built-in FujiNet and dial another instance "
+                          "instead. Set that instance's BoIP listener to this "
+                          "address (applied when Preferences closes).",
+                          "fujinet_external", 0, 0);
+    addr = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(addr),
+                                  "Address:port, e.g. " EXTERNAL_PLACEHOLDER);
+    gtk_editable_set_text(GTK_EDITABLE(addr),
+                          smssession_get_str(session, "fujinet_external_addr", ""));
+    g_signal_connect(addr, "changed", G_CALLBACK(addr_changed), state);
+    gtk_widget_set_sensitive(addr, adw_switch_row_get_active(ADW_SWITCH_ROW(external)));
+    g_signal_connect(external, "notify::active", G_CALLBACK(external_toggled), addr);
+    adw_preferences_group_add(fujinet, external);
+    adw_preferences_group_add(fujinet, addr);
     {
-        GtkWidget *row = info_row("Web UI", smssession_fujinet_webui_url(session));
+        GtkWidget *row = info_row("Web UI",
+                                  smssession_fujinet_external(session)
+                                      ? "FujiNet is external"
+                                      : smssession_fujinet_webui_url(session));
         GtkWidget *open = gtk_button_new_with_label("Open");
         gtk_widget_set_valign(open, GTK_ALIGN_CENTER);
         g_signal_connect(open, "clicked", G_CALLBACK(on_open_webui), state);

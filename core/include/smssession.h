@@ -112,13 +112,17 @@ typedef struct {
                                  as assumed; MAME's unit does not) */
     int analog_joystick;      /* gamepad sticks drive the D-pad too */
     int enable_fujinet;       /* start the in-process FujiNet runtime */
+    int external_fujinet;     /* 1: don't start it; dial another FujiNet
+                               * instance at boip_connect instead */
+    const char *boip_connect; /* "host:port" or "port" the cartridge dials
+                               * (external only); NULL/"" = 127.0.0.1:11508 */
     int enable_audio;         /* open the SDL audio device */
     int enable_gamepad;       /* start the SDL gamepad thread */
 } smssession_start_opts;
 
 /* Fills opts from the settings store (keys: cart console bios.<console id>
  * fm_unit fm_unit_mutes_psg analog_joystick enable_fujinet enable_audio
- * enable_gamepad). */
+ * enable_gamepad fujinet_external fujinet_external_addr). */
 void smssession_default_opts(smssession *s, smssession_start_opts *opts);
 
 /* Starts FujiNet (if enabled) and then the machine.
@@ -387,7 +391,18 @@ void smssession_set_console_bios(smssession *s, int console, const char *name);
 const char *smssession_roms_path(const smssession *s);
 
 /* ---- FujiNet -------------------------------------------------------------*/
+/* Parses the "Use external FujiNet" address field: "host:port" (host a name
+ * or an IPv4 literal) or a bare "port". Empty text means the default,
+ * 127.0.0.1:11508. Returns 0 and fills host/port, or -1 when the text is not
+ * an address:port (nothing is written then). */
+int         smssession_parse_hostport(const char *text, char *host,
+                                      int hostsz, int *port);
 int         smssession_fujinet_running(const smssession *s);
+/* 1 when the session was started to dial an external FujiNet. */
+int         smssession_fujinet_external(const smssession *s);
+/* "host:port" the cartridge dials (the running session's, or the default
+ * 127.0.0.1:11508 before the first start). */
+const char *smssession_boip_endpoint(const smssession *s);
 const char *smssession_fujinet_webui_url(const smssession *s);
 int         smssession_fujinet_copy_log(smssession *s, char *dst, int max);
 /* The cartridge's link to FujiNet: 1 up, 0 down, -1 not running. */

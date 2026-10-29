@@ -134,7 +134,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSPopUpButton *_consolePopup, *_biosPopup;
     NSButton *_biosImport;
     NSButton *_fmUnitBox, *_fmMutesBox;
-    NSTextField *_fmNote, *_ymNote, *_webUiLabel;
+    NSTextField *_fmNote, *_ymNote, *_webUiLabel, *_externalField;
     NSTimer *_settingsTimer;
     unsigned _padGeneration;
 
@@ -828,8 +828,28 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
     if (!_webUiLabel) return;
     const char *url = smssession_fujinet_webui_url(_session);
-    _webUiLabel.stringValue = (smssession_fujinet_running(_session) && url && url[0])
-        ? [NSString stringWithUTF8String:url] : @"(FujiNet is not running)";
+    _webUiLabel.stringValue = smssession_fujinet_external(_session)
+        ? @"(FujiNet is external)"
+        : (smssession_fujinet_running(_session) && url && url[0])
+            ? [NSString stringWithUTF8String:url] : @"(FujiNet is not running)";
+}
+
+/* The external-FujiNet address field: valid text (or none, meaning
+ * 127.0.0.1:11508) is saved; anything else is shown in red and not saved. */
+- (void)externalAddrChanged:(id)sender
+{
+    NSTextField *field = sender;
+    NSString *text = [field.stringValue
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    char host[64];
+    int port;
+    if (smssession_parse_hostport(text.UTF8String, host, sizeof host, &port) != 0) {
+        field.textColor = NSColor.systemRedColor;
+        return;
+    }
+    field.textColor = NSColor.controlTextColor;
+    smssession_set_str(_session, "fujinet_external_addr", text.UTF8String);
+    _sessionDirty = YES;
 }
 
 - (void)settingChanged:(id)sender
@@ -850,6 +870,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     smssession_set_int(_session, key, value);
     _sessionDirty = YES;
     if (!strcmp(key, "console") || !strcmp(key, "fm_unit")) [self refreshMachineSettings];
+    if (!strcmp(key, "fujinet_external")) _externalField.enabled = value != 0;
 }
 
 - (void)showSettings:(id)sender
@@ -907,6 +928,15 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSStackView *webUiRow = [NSStackView stackViewWithViews:@[_webUiLabel, webUiOpen]];
     webUiRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
 
+    _externalField = [NSTextField textFieldWithString:
+        @(smssession_get_str(_session, "fujinet_external_addr", ""))];
+    _externalField.placeholderString = @"127.0.0.1:11508";
+    _externalField.preferredMaxLayoutWidth = 240;
+    _externalField.enabled = smssession_get_int(_session, "fujinet_external", 0) != 0;
+    _externalField.target = self;
+    _externalField.action = @selector(externalAddrChanged:);
+    [_externalField.cell setSendsActionOnEndEditing:YES];
+
     NSArray<NSArray<NSView *> *> *rows = @[
         @[ [self sectionLabel:@"Machine"], [self note:@"console, BIOS and FM apply with a power cycle when this window closes"] ],
         @[ [NSTextField labelWithString:@"Console"], _consolePopup ],
@@ -924,6 +954,8 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         @[ [NSTextField labelWithString:@"Gamepads"], padRow ],
         @[ [self sectionLabel:@"FujiNet"], [self note:@"applied by restarting the session when this window closes"] ],
         @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"enable_fujinet" title:@"Enable FujiNet" fallback:1] ],
+        @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"fujinet_external" title:@"Use external FujiNet" fallback:0] ],
+        @[ [NSTextField labelWithString:@"Address:port"], _externalField ],
         @[ [NSTextField labelWithString:@"Web UI"], webUiRow ],
     ];
 
@@ -974,6 +1006,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         return;
     }
     if (note.object != _settingsWindow) return;
+    [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
     [_settingsTimer invalidate];
     _settingsTimer = nil;
     if (!_sessionDirty) return;
@@ -1004,6 +1037,10 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 - (void)showFujiNetLog:(id)sender
 {
     (void)sender;
+    if (smssession_fujinet_external(_session)) {
+        [self alert:@"FujiNet is external" text:@"Its console output is in the process that is running it."];
+        return;
+    }
     if (_logWindow) {
         [_logWindow makeKeyAndOrderFront:nil];
         if (!_logTimer)
@@ -1044,6 +1081,10 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 - (void)openWebUI:(id)sender
 {
     (void)sender;
+    if (smssession_fujinet_external(_session)) {
+        [self alert:@"FujiNet is external" text:@"Use the web UI of the FujiNet instance this app dials."];
+        return;
+    }
     if (!smssession_fujinet_running(_session)) {
         [self alert:@"FujiNet is not running" text:nil];
         return;

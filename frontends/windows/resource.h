@@ -38,6 +38,8 @@
 #define IDC_SET_AUDIO      2011
 #define IDC_SET_GAMEPAD    2012
 #define IDC_SET_FM_MUTES   2013
+#define IDC_SET_EXTERNAL   2014
+#define IDC_SET_EXT_ADDR   2015
 
 #define IDC_LOG_EDIT       2100
 #define IDC_STATUSBAR      2200

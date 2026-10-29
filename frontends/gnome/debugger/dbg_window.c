@@ -655,7 +655,11 @@ static void refresh_fujinet(DbgWin *w, gboolean force)
     GString *t;
     int n = smsdebug_fujinet_trace(w->dbg, p, TRACE_MAX), i;
 
-    if (!smssession_fujinet_running(w->session)) {
+    if (smssession_fujinet_external(w->session)) {
+        smssession_cart_status(w->session, status, sizeof status);
+        g_snprintf(note, sizeof note, "External FujiNet at %s. Cartridge: %s.",
+                   smssession_boip_endpoint(w->session), status);
+    } else if (!smssession_fujinet_running(w->session)) {
         g_strlcpy(note, "FujiNet is off (Preferences \xe2\x96\xb8 FujiNet).", sizeof note);
     } else {
         smssession_cart_status(w->session, status, sizeof status);

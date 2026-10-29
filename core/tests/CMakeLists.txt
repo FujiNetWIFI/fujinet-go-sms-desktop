@@ -93,6 +93,16 @@ add_test(NAME bindings COMMAND bindings_test)
 sms_session_test(media_test media_test.c)
 add_test(NAME media COMMAND media_test)
 
+# The external-FujiNet address field's parser.
+sms_session_test(hostport_test hostport_test.c)
+add_test(NAME hostport COMMAND hostport_test)
+
+# External FujiNet: the cartridge dials a stand-in listener and no built-in
+# runtime is started. SKIPs (77) on Windows (POSIX sockets).
+sms_session_test(external_test external_test.c)
+add_test(NAME external COMMAND external_test)
+set_tests_properties(external PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+
 # The gamepad layer's pure helpers, and that the SDL subsystem starts and
 # stops with no hardware attached.
 sms_session_test(gamepad_test gamepad_test.c)

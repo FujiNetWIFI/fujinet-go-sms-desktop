@@ -1338,7 +1338,11 @@ static void fill(NSStackView *stack, NSView *view)
     int n = smsdebug_fujinet_trace(_dbg, p, TRACE_MAX);
     if (n < 0) n = 0;
 
-    if (!smssession_fujinet_running(_session)) {
+    if (smssession_fujinet_external(_session)) {
+        smssession_cart_status(_session, status, (int)sizeof status);
+        _fujiNote.stringValue = [NSString stringWithFormat:@"External FujiNet at %s. Cartridge: %@.",
+                                 smssession_boip_endpoint(_session), stripControl(status)];
+    } else if (!smssession_fujinet_running(_session)) {
         _fujiNote.stringValue = @"FujiNet is off (Settings ▸ FujiNet).";
     } else {
         smssession_cart_status(_session, status, (int)sizeof status);

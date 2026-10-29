@@ -50,6 +50,9 @@ struct smssession {
     char fujinet_runtime_src[SMS_PATH_MAX]; /* caller-given pristine tree, or "" */
     char webui_url[64];                 /* http://127.0.0.1:11509/ */
     int  fujinet_running;
+    int  fujinet_external;              /* dialing a FujiNet that isn't ours */
+    char boip_endpoint[80];             /* "host:port" the cartridge dials */
+    char boip_addr[80];                 /* the external address as typed */
 
     /* cross-thread system-action latch (see smssession_sysaction_post) */
     pthread_mutex_t sysact_mtx;
