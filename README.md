@@ -75,6 +75,10 @@ The icon is the family mark in white on the Master System's red
 the same red, marking held buttons, the Map target, the current line in the
 disassembly and the Run button while stopped.
 
+## External FujiNet
+
+A switch in Preferences makes the app connect to another FujiNet instance at a host:port you enter, e.g. `127.0.0.1:11508`, instead of starting the built-in one.
+
 ## Building
 
 ```sh
