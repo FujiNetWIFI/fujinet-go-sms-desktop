@@ -31,7 +31,7 @@ add_executable(fujinet-go-sms-kde
 target_link_libraries(fujinet-go-sms-kde PRIVATE sms_session Qt6::Widgets Qt6::GuiPrivate)
 # The display's shaders, baked for every backend and embedded as resources.
 qt_add_shaders(fujinet-go-sms-kde "display_shaders"
-  PREFIX "/shaders"
+  PREFIX "/"
   FILES shaders/display.vert shaders/display.frag)
 target_compile_options(fujinet-go-sms-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-sms-kde PRIVATE
