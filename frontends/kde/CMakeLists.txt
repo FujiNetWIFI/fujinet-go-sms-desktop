@@ -9,7 +9,8 @@
 
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.4 COMPONENTS Widgets QUIET)
+# Qt 6.7 for QRhiWidget (the GPU display); ShaderTools bakes its shaders.
+find_package(Qt6 6.7 COMPONENTS Widgets GuiPrivate ShaderTools QUIET)
 if(NOT Qt6_FOUND)
   message(STATUS "kde frontend: Qt6 Widgets not found -- skipping")
   return()
@@ -19,13 +20,19 @@ add_executable(fujinet-go-sms-kde
   main.cpp
   MainWindow.cpp
   DisplayWidget.cpp
+  SoftDisplayWidget.cpp
+  FrameFeed.cpp
   KeyForward.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
   controllers/ControllersWindow.cpp
   debugger/DebuggerWindow.cpp
 )
-target_link_libraries(fujinet-go-sms-kde PRIVATE sms_session Qt6::Widgets)
+target_link_libraries(fujinet-go-sms-kde PRIVATE sms_session Qt6::Widgets Qt6::GuiPrivate)
+# The display's shaders, baked for every backend and embedded as resources.
+qt_add_shaders(fujinet-go-sms-kde "display_shaders"
+  PREFIX "/shaders"
+  FILES shaders/display.vert shaders/display.frag)
 target_compile_options(fujinet-go-sms-kde PRIVATE -Wall -Wextra)
 target_compile_definitions(fujinet-go-sms-kde PRIVATE
   SMS_SOURCE_ICON_DIR="${CMAKE_SOURCE_DIR}/data/icons")

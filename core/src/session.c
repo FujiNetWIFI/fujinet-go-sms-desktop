@@ -590,6 +590,17 @@ int smssession_copy_frame(smssession *s, uint32_t *dst, int *height, uint64_t *s
     return sms_host_frame_copy(dst, height, serial_inout);
 }
 
+void smssession_set_frame_callback(smssession *s, smssession_frame_cb cb, void *ctx)
+{
+    (void)s;
+    sms_host_set_frame_callback(cb, ctx);
+}
+
+uint64_t smssession_frame_count(smssession *s)
+{
+    return s->running ? sms_host_frame_count() : 0;
+}
+
 int smssession_refresh_rate(smssession *s)
 {
     if (!s->running)

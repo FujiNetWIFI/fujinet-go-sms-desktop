@@ -183,8 +183,20 @@ int  smssession_eject(smssession *s);
  * returns 0 when unchanged, leaving dst alone. Pass 0 to force a copy. */
 int  smssession_copy_frame(smssession *s, uint32_t *dst, int *height,
                            uint64_t *serial_inout);
+/* Ask to be told when a new frame is ready, for a frontend with no frame
+ * clock of its own: cb(ctx) runs on the machine thread after each frame is
+ * published. Keep it quick (post an event and return) and do not call into
+ * the session from it. Passing NULL stops the calls, and returns only after
+ * any call in flight has finished, so ctx may be freed right after. */
+typedef void (*smssession_frame_cb)(void *ctx);
+void smssession_set_frame_callback(smssession *s, smssession_frame_cb cb, void *ctx);
 /* 60 or 50: the running console's refresh rate (rounded). */
 int  smssession_refresh_rate(smssession *s);
+/* Frames the machine has run since it started. Unlike copy_frame's serial it
+ * counts every frame, including the ones identical to their predecessor
+ * (which are not published again): use it to ask "is the machine running",
+ * not "is the picture changing". */
+uint64_t smssession_frame_count(smssession *s);
 
 /* Feed the UI's frame-clock ticks (CLOCK_MONOTONIC ns). While a steady
  * stream near the console's refresh rate arrives, the machine phase-locks

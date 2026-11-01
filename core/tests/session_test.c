@@ -37,13 +37,17 @@ static void sleep_ms(int ms)
 
 static uint32_t px[SMSSESSION_FB_WIDTH * SMSSESSION_FB_MAX_HEIGHT];
 
+/* The machine runs `count` more frames. A frame identical to its predecessor
+ * is not published again (a still CONFIG screen publishes nothing), so this
+ * counts the machine's frames, not copy_frame's serial; the copy keeps the
+ * caller's serial current. */
 static int wait_frames(smssession *s, uint64_t *serial, int count, int timeout_ms)
 {
-    int got = 0, waited = 0, h;
+    uint64_t start = smssession_frame_count(s);
+    int waited = 0, h;
     while (waited < timeout_ms) {
-        if (smssession_copy_frame(s, px, &h, serial)) {
-            if (++got >= count) return 1;
-        }
+        smssession_copy_frame(s, px, &h, serial);
+        if (smssession_frame_count(s) >= start + (uint64_t)count) return 1;
         sleep_ms(2); waited += 2;
     }
     return 0;
@@ -123,6 +127,7 @@ int main(void)
     if (!smssession_is_running(s)) { printf("error: %s\n", smssession_last_error(s)); return 1; }
 
     check(wait_frames(s, &serial, 30, 5000), "frames arrive");
+    check(serial != 0, "CONFIG published a picture");
     check(wait_status(s, "link down", 5000), "CONFIG runs link-down");
     check(!smssession_cart_booted_game(s), "CONFIG is not a booted game");
     {

@@ -67,6 +67,13 @@ void sms_host_soft_reset(void);
  * words) when its serial differs from *serial_inout; returns nonzero, sets
  * *height (224 NTSC / 240 PAL) and updates the serial when it copied. */
 int sms_host_frame_copy(uint32_t *dst, int *height, uint64_t *serial_inout);
+/* Called on the machine thread right after each frame is published, so a
+ * frontend with no frame clock can draw when there is something to draw
+ * instead of polling. The callback must be quick and must not call back into
+ * the host (it runs with a lock held: sms_host_set_frame_callback(NULL, NULL)
+ * waits for a call in flight, so the context may be freed once it returns). */
+typedef void (*sms_host_frame_cb)(void *ctx);
+void sms_host_set_frame_callback(sms_host_frame_cb cb, void *ctx);
 /* Frames the machine has run since start (for pacing checks). */
 uint64_t sms_host_frame_count(void);
 /* How the deadline ladder fared (boot_smoke prints it): sleeps taken, how

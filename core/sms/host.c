@@ -124,13 +124,41 @@ static uint32_t s_frame[SMS_FB_WIDTH * SMS_FB_MAX_HEIGHT];
 static int s_frame_height = SMS_FB_HEIGHT_NTSC;
 static uint64_t s_frame_serial = 0;
 
+static pthread_mutex_t s_cb_lock = PTHREAD_MUTEX_INITIALIZER;
+static sms_host_frame_cb s_frame_cb;
+static void *s_frame_cb_ctx;
+
+void sms_host_set_frame_callback(sms_host_frame_cb cb, void *ctx)
+{
+    pthread_mutex_lock(&s_cb_lock);
+    s_frame_cb = cb;
+    s_frame_cb_ctx = ctx;
+    pthread_mutex_unlock(&s_cb_lock);
+}
+
+/* A frame identical to the one in the slot is not a new frame: the serial
+ * stays and nobody is called. The console runs at 60 Hz whatever it shows, and
+ * most of what a FujiNet cartridge shows (CONFIG, a menu, a game over screen)
+ * does not move, so without this the frontends would copy, upload and draw the
+ * same picture sixty times a second. (The compare is ~15 us for 240 KB.) */
 static void frame_publish(const uint32_t *fb, int height)
 {
+    const size_t bytes = (size_t)SMS_FB_WIDTH * (size_t)height * sizeof s_frame[0];
+
     pthread_mutex_lock(&s_frame_lock);
-    memcpy(s_frame, fb, (size_t)SMS_FB_WIDTH * (size_t)height * sizeof s_frame[0]);
+    if (s_frame_serial != 0 && height == s_frame_height && memcmp(s_frame, fb, bytes) == 0) {
+        pthread_mutex_unlock(&s_frame_lock);
+        return;
+    }
+    memcpy(s_frame, fb, bytes);
     s_frame_height = height;
     s_frame_serial++;
     pthread_mutex_unlock(&s_frame_lock);
+
+    pthread_mutex_lock(&s_cb_lock);
+    if (s_frame_cb)
+        s_frame_cb(s_frame_cb_ctx);
+    pthread_mutex_unlock(&s_cb_lock);
 }
 
 int sms_host_frame_copy(uint32_t *dst, int *height, uint64_t *serial_inout)
