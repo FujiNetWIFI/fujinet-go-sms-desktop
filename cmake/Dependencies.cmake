@@ -34,13 +34,16 @@
 
 find_package(Git QUIET)
 
-# fujinet-firmware, branch add-sms (8f7389de6): the Sega Master System
-# cartridge (pico/sms) with the Phantasy Star-style CONFIG baked in, its
-# mount and boot progress window and long-filename scroll included.
+# fujinet-firmware, add-sms (8f7389de6: the Sega Master System cartridge
+# (pico/sms) with the Phantasy Star-style CONFIG baked in, its mount and boot
+# progress window and long-filename scroll included) plus the BoIP idle-wait
+# fix (firmware PR #2247; idle wakeups ~1000/s -> ~100/s). The commit lives
+# on the tschak909 fork (branch boip-idle-wait-on-add-sms). Temporary: moves
+# back to master when #2247 merges.
 # Recorded in three places -- here and in both flatpak manifests
 # (build-aux/flatpak/*.yml).
-set(FUJINET_COMMIT "8f7389de6bf387b8db55169a85b0fe56c91254e4")
-set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
+set(FUJINET_COMMIT "446a728f83dd5923006842e2cdbc8b74444bd8f3")
+set(FUJINET_URL "https://github.com/tschak909/fujinet-firmware")
 
 # sms_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>
 #                           RESULT <out>
