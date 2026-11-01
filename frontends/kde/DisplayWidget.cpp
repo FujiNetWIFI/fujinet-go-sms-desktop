@@ -120,6 +120,11 @@ void DisplayWidget::rebuildTexture(int lines)
     m_tex->create();
     m_texLines = lines;
     m_srb.reset();   /* it names the old texture */
+    /* A new texture is empty. A still picture publishes nothing more, so
+     * re-upload what the scratch image already holds (after a lost device or
+     * an RHI change the old texture's content is gone). */
+    if (m_lines > 0)
+        m_dirty = true;
 }
 
 void DisplayWidget::initialize(QRhiCommandBuffer *)
