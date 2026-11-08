@@ -160,6 +160,35 @@ int main(void)
     SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_BACK, false);
     expect(s, 0, 0, 0, "released");
 
+    /* A trigger past half travel used to deadlock the gamepad thread on its
+     * own lock, and the Controllers panel's timers (same lock) froze the UI
+     * with it. A hang here is a ctest timeout. */
+    smssession_binding_set_button(s, SMS_TARGET_SWITCH(SMS_SW_RESET), SMS_PAD_BTN_LEFT_TRIGGER, NULL, 0);
+    SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 32767);
+    expect(s, 0, 0, 1, "left trigger presses its binding");
+    (void)smssession_gamepad_generation(s);
+    (void)smssession_gamepad_effective_port(s, 0);
+    printf("ok: session lock still free with a trigger held\n");
+    SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 0);
+    expect(s, 0, 0, 0, "left trigger released");
+    smssession_gamepad_capture_begin(s);
+    SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767);
+    {
+        int btn = SMS_PAD_BTN_NONE, got = 0;
+        for (i = 0; i < 100 && !got; i++) {
+            got = smssession_gamepad_capture_poll(s, &btn);
+            if (!got) sleep_ms(20);
+        }
+        if (got && btn == SMS_PAD_BTN_RIGHT_TRIGGER)
+            printf("ok: map mode captures a trigger\n");
+        else {
+            printf("FAIL: map mode captures a trigger (%d)\n", btn);
+            failures++;
+        }
+    }
+    SDL_SetJoystickVirtualAxis(vj, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0);
+    smssession_bindings_reset(s);
+
     /* hot-unplug while held: the player is released, not left holding the
      * last direction forever */
     SDL_SetJoystickVirtualButton(vj, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true);
