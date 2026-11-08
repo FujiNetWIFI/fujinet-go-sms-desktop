@@ -5,10 +5,12 @@
  */
 
 #include "SettingsDialog.h"
+#include "help/HelpWindow.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QShortcut>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -274,7 +276,12 @@ bool SettingsDialog::run(QWidget *parent, smssession *session)
     }
     outer->addWidget(fujiBox);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    /* Help, F1 and Ctrl+Shift+H (the app's shortcuts don't reach a modal dialog) */
+    dlg.setProperty("smsHelpContext", QStringLiteral("prefs/Machine"));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Help);
+    QObject::connect(buttons, &QDialogButtonBox::helpRequested, &dlg, [&dlg] { smsHelpFor(&dlg); });
+    for (const char *key : { "F1", "Ctrl+Shift+H" })
+        new QShortcut(QKeySequence(QString::fromLatin1(key)), &dlg, [&dlg] { smsHelpFor(&dlg); });
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, [&] {
         char host[64];
         int port;

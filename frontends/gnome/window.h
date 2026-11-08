@@ -18,6 +18,10 @@ GtkWidget *sms_window_new(AdwApplication *app, smssession *session);
 /* main.c: the icon name to use (the installed id, or the in-tree art). */
 const char *sms_icon_name(void);
 void sms_window_toast(SMSWindow *self, const char *text);
+
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences is open. */
+const char *sms_window_help_context(SMSWindow *self);
 /* The display's shape: 0 = the television's pixel aspect, 1 = square. */
 void sms_window_apply_aspect(SMSWindow *self, int aspect);
 /* A dropped or command-line file: a BIOS is imported, a cartridge opened,

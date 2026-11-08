@@ -22,6 +22,7 @@
 
 #include "fujilog.h"
 #include "window.h"
+#include "help/help_window.h"
 
 #include <string.h>
 
@@ -454,10 +455,12 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
     adw_dialog_set_title(ADW_DIALOG(dialog), "Preferences");
     adw_dialog_set_content_width(ADW_DIALOG(dialog), 600);
     adw_preferences_page_set_title(page, "Machine");
+    adw_preferences_page_set_name(page, "Machine");
     adw_preferences_page_set_icon_name(page, "applications-games-symbolic");
 
     /* ---- the machine: applied by a power cycle when the dialog closes */
     adw_preferences_group_set_title(machine, "Machine");
+    adw_preferences_group_set_header_suffix(machine, sms_help_button("prefs/Machine"));
     adw_preferences_group_set_description(machine,
         "Applied when Preferences closes, with a power cycle: an opened "
         "cartridge boots again on the new console");

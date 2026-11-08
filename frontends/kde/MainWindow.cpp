@@ -28,6 +28,7 @@
 #include "KeyForward.h"
 #include "SettingsDialog.h"
 #include "debugger/DebuggerWindow.h"
+#include "help/HelpWindow.h"
 #include "controllers/ControllersWindow.h"
 
 static const char *const kCartFilter =
@@ -43,6 +44,7 @@ MainWindow::MainWindow(smssession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
 {
     setWindowTitle(QStringLiteral("FujiNet Go SMS"));
+    setProperty("smsHelpContext", QStringLiteral("main"));
     /* 306x224 (268x224 at 8:7 pixels) at 3x. */
     resize(918, 672 + 60);
     setAcceptDrops(true);
@@ -176,6 +178,18 @@ void MainWindow::buildMenus()
     });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
+    {
+        /* works from every window of the app (the Controllers window and the
+         * Debugger have the keyboard too) */
+        QAction *helpAct = help->addAction(QStringLiteral("FujiNet Go SMS &Help"));
+        helpAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H));
+        helpAct->setShortcutContext(Qt::ApplicationShortcut);
+        addAction(helpAct);
+        connect(helpAct, &QAction::triggered, this, [this] {
+            smsHelpFor(QApplication::activeWindow() ? QApplication::activeWindow() : this);
+        });
+    }
+    help->addSeparator();
     help->addAction(QStringLiteral("&About FujiNet Go SMS"), this, &MainWindow::showAbout);
 }
 

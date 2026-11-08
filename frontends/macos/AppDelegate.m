@@ -13,6 +13,7 @@
 #import "KeyForward.h"
 #import "controllers/ControllersWindow.h"
 #import "debugger/DebuggerWindow.h"
+#import "help/HelpWindow.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -447,6 +448,9 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 
     NSMenuItem *helpItem = [[NSMenuItem alloc] init];
     NSMenu *help = [[NSMenu alloc] initWithTitle:@"Help"];
+    /* openHelp:, not showHelp: (AppKit's: "Help isn't available") */
+    [self item:help title:APP_TITLE @" Help" action:@selector(openHelp:) key:@"?"];
+    [help addItem:[NSMenuItem separatorItem]];
     [self item:help title:@"About " APP_TITLE action:@selector(showAbout:) key:@""];
     [helpItem setSubmenu:help];
     [bar addItem:helpItem];
@@ -454,6 +458,15 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [NSApp setMainMenu:bar];
     [NSApp setWindowsMenu:windows];
     [NSApp setHelpMenu:help];
+    /* the Help menu's search field finds the Help's sections too */
+    [NSApp registerUserInterfaceItemSearchHandler:[SMSHelpWindow shared]];
+}
+
+/* For the window in front: Settings, the debugger's tab ... */
+- (void)openHelp:(id)sender
+{
+    (void)sender;
+    [[SMSHelpWindow shared] showFor:[NSApp keyWindow]];
 }
 
 /* ---- actions ---------------------------------------------------------------- */
@@ -977,7 +990,16 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     _settingsWindow.title = @"Settings";
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
-    _settingsWindow.contentView = root;
+    {
+        /* the settings over a strip with the Help button */
+        NSButton *helpBtn = SMSHelpButton(@"prefs/Machine");
+        NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
+        wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
+        wrap.alignment = NSLayoutAttributeLeading;
+        wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
+        _settingsWindow.contentView = wrap;
+        SMSSetHelpContext(_settingsWindow, @"prefs/Machine");
+    }
     [_settingsWindow center];
 
     [self refreshMachineSettings];
@@ -1049,9 +1071,10 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         return;
     }
 
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 860, 600)];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 36, 860, 564)];
     scroll.hasVerticalScroller = YES;
     scroll.autohidesScrollers = NO;
+    scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
     _logView = [[NSTextView alloc] initWithFrame:scroll.bounds];
     _logView.editable = NO;
@@ -1069,7 +1092,17 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     _logWindow.title = @"FujiNet Console Log";
     _logWindow.releasedWhenClosed = NO;
     _logWindow.delegate = self;
-    _logWindow.contentView = scroll;
+    {
+        /* the log over a strip with the Help button */
+        NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 860, 600)];
+        NSButton *help = SMSHelpButton(@"fujilog");
+        [help setFrameOrigin:NSMakePoint(10, 6)];
+        help.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+        [box addSubview:scroll];
+        [box addSubview:help];
+        _logWindow.contentView = box;
+    }
+    SMSSetHelpContext(_logWindow, @"fujilog");
     [_logWindow center];
 
     _logTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self

@@ -17,6 +17,7 @@
 
 #include "../FujiNetWindows.h"
 #include "../KeyForward.h"
+#include "../help/HelpWindow.h"
 
 /* ---- PadButton ------------------------------------------------------------ */
 
@@ -76,6 +77,7 @@ ControllersWindow::ControllersWindow(smssession *session, QWidget *parent)
                       | Qt::CustomizeWindowHint), m_session(session)
 {
     setWindowTitle(QStringLiteral("Controllers"));
+    setProperty("smsHelpContext", QStringLiteral("controllers"));
     setFocusPolicy(Qt::StrongFocus);
 
     auto *root = new QVBoxLayout(this);
@@ -123,6 +125,7 @@ ControllersWindow::ControllersWindow(smssession *session, QWidget *parent)
     maprow->addWidget(m_mapButton);
     maprow->addWidget(defaults);
     maprow->addWidget(m_hint, 1);
+    maprow->addWidget(smsHelpButton(QStringLiteral("controllers")));
     root->addLayout(maprow);
 
     connect(&m_captureTimer, &QTimer::timeout, this, &ControllersWindow::pollCapture);

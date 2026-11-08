@@ -22,6 +22,7 @@ add_executable(fujinet-go-sms-macos MACOSX_BUNDLE
   AppDelegate.m
   DisplayView.m
   KeyForward.m
+  help/HelpWindow.m
   controllers/ControllersWindow.m
   debugger/DebuggerWindow.m
   "${SMS_ICNS}"

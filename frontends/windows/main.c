@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "help/help_window.h"
 #include "smssession.h"
 #include "controllers/controller_window.h"
 #include "debugger/dbg_window.h"
@@ -284,6 +285,8 @@ static void build_menu(HWND hwnd)
     AppendMenuA(fuji, MF_STRING, IDM_FUJINET_CONFIG, "&Web UI");
     AppendMenuA(fuji, MF_STRING, IDM_FUJINET_LOG, "Console &Log");
 
+    AppendMenuA(help, MF_STRING, IDM_HELP, APP_TITLE " &Help\tCtrl+Shift+H");
+    AppendMenuA(help, MF_SEPARATOR, 0, NULL);
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About " APP_TITLE);
 
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)machine, "&Machine");
@@ -499,6 +502,7 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case IDC_SET_HELP: sms_help_for(hwnd); return 0;
         case IDC_SET_CONSOLE:
             if (HIWORD(wp) == CBN_SELCHANGE) {
                 const int c = (int)SendMessageA(GetDlgItem(hwnd, IDC_SET_CONSOLE), CB_GETCURSEL, 0, 0);
@@ -780,6 +784,12 @@ static void show_settings(HINSTANCE inst)
     SetWindowPos(g_settings_window, NULL, 0, 0, want.right - want.left, want.bottom - want.top,
                  SWP_NOMOVE | SWP_NOZORDER);
 
+    {
+        HWND hb = CreateWindowExA(0, "BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 16, y - 34, 80, 26,
+                                  g_settings_window, (HMENU)(INT_PTR)IDC_SET_HELP, inst, NULL);
+        SendMessageA(hb, WM_SETFONT, (WPARAM)font, TRUE);
+        sms_help_set_context(g_settings_window, "prefs/Machine", 1);
+    }
     SetTimer(g_settings_window, IDT_SETTINGS_PADS, 500, NULL);
     ShowWindow(g_settings_window, SW_SHOW);
 }
@@ -787,7 +797,8 @@ static void show_settings(HINSTANCE inst)
 /* ---- FujiNet console log --------------------------------------------------- */
 
 static HWND g_log_window;
-static HWND g_log_edit;
+static HWND g_log_edit, g_log_help;
+#define LOG_BAR 34
 
 static void log_refresh(void)
 {
@@ -828,9 +839,13 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE: {
         RECT rc;
         GetClientRect(hwnd, &rc);
-        if (g_log_edit) MoveWindow(g_log_edit, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+        if (g_log_edit) MoveWindow(g_log_edit, 0, LOG_BAR, rc.right - rc.left, rc.bottom - rc.top - LOG_BAR, TRUE);
+        if (g_log_help) MoveWindow(g_log_help, rc.right - 84, 4, 76, LOG_BAR - 8, TRUE);
         return 0;
     }
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_LOG_HELP) { sms_help_for(hwnd); return 0; }
+        break;
     case WM_TIMER:
         if (wp == IDT_LOG_REFRESH) log_refresh();
         return 0;
@@ -841,6 +856,7 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, IDT_LOG_REFRESH);
         g_log_window = NULL;
         g_log_edit = NULL;
+        g_log_help = NULL;
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -876,6 +892,11 @@ static void show_fujinet_log(HINSTANCE inst)
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
         0, 0, rc.right - rc.left, rc.bottom - rc.top, g_log_window, (HMENU)(INT_PTR)IDC_LOG_EDIT, inst, NULL);
     SendMessageA(g_log_edit, WM_SETFONT, (WPARAM)GetStockObject(ANSI_FIXED_FONT), TRUE);
+    g_log_help = CreateWindowA("BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10,
+                               g_log_window, (HMENU)(INT_PTR)IDC_LOG_HELP, inst, NULL);
+    SendMessageA(g_log_help, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    sms_help_set_context(g_log_window, "fujilog", 1);
+    SendMessageA(g_log_window, WM_SIZE, 0, 0);
     SetTimer(g_log_window, IDT_LOG_REFRESH, 1000, NULL);
     log_refresh();
     ShowWindow(g_log_window, SW_SHOW);
@@ -1053,6 +1074,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             ShellExecuteA(hwnd, "open", smssession_fujinet_webui_url(g_session), NULL, NULL, SW_SHOWNORMAL);
             return 0;
+        case IDM_HELP: sms_help_for(hwnd); return 0;
         case IDM_ABOUT: {
             char about[640];
             snprintf(about, sizeof about,
@@ -1148,6 +1170,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
                             CW_USEDEFAULT, CW_USEDEFAULT, want.right - want.left,
                             want.bottom - want.top + 24, NULL, NULL, inst, NULL);
     if (!g_hwnd) return 1;
+    sms_help_set_context(g_hwnd, "main", 0);       /* F1 is the console's SELECT here */
     build_menu(g_hwnd);
     g_statusbar = CreateWindowExA(0, STATUSCLASSNAMEA, "", WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
                                   0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)IDC_STATUSBAR, inst, NULL);
@@ -1193,6 +1216,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
          * regardless of which child control has the focus. */
         if (sms_debugger_pretranslate(&msg)) continue;
         if (sms_controller_pretranslate(&msg)) continue;
+        if (sms_help_pretranslate(&msg)) continue;
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }

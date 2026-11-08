@@ -84,6 +84,10 @@ sms_session_test(session_test session_test.c)
 add_test(NAME session COMMAND session_test)
 set_tests_properties(session PROPERTIES TIMEOUT 120)
 
+# The built-in Help covers every setting, key, console and context.
+sms_session_test(help_test help_test.c)
+add_test(NAME help COMMAND help_test)
+
 # The remappable binding table and the keyboard translator, pure.
 sms_session_test(bindings_test bindings_test.c)
 add_test(NAME bindings COMMAND bindings_test)

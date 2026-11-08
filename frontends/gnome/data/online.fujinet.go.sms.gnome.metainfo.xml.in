@@ -32,7 +32,8 @@
       can be remapped to a key or a gamepad button. A native debugger has a
       command prompt, the Z80 and console RAM, disassembly with breakpoints,
       the VDP with its name table, tile, sprite and palette views, the sound
-      chips and I/O ports, and the FujiNet cartridge.
+      chips and I/O ports, and the FujiNet cartridge. Built-in, searchable
+      Help covers all of it.
     </p>
     <p>
       No BIOS is required and nothing copyrighted is included: every console

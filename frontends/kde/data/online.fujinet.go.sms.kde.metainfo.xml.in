@@ -31,7 +31,8 @@
       they are plugged in, and a native debugger is a key press away: a
       command prompt, the Z80 and RAM, a disassembly with breakpoints, the
       VDP with its name table, tiles, sprites and palette, the PSG, FM and
-      I/O ports, and the FujiNet cartridge.
+      I/O ports, and the FujiNet cartridge. Built-in, searchable Help covers
+      all of it.
     </p>
     <p>
       Nothing copyrighted is included and no BIOS is ever required: every

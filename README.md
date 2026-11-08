@@ -49,6 +49,11 @@ desktop app. A member of the FujiNet Go desktop family
   Reset** (F3) pulls the console's /RESET line: the cartridge goes back to
   CONFIG, or an opened cartridge restarts. **Reset to CONFIG** (Escape) is a
   power cycle: it ejects an opened cartridge and boots CONFIG again.
+- **Built-in Help.** **Help ▸ FujiNet Go SMS Help** (Ctrl+Shift+H, ⌘? on a
+  Mac) opens a searchable Help, and the Help buttons in Preferences, the
+  Controllers window, the debugger and the console log open the topic for what
+  they show. The text is [data/help/help.md](data/help/help.md), which GitHub
+  shows as it is; the build embeds it and every frontend lays it out natively.
 - **The debugger, in every frontend.** F12 opens it and stops the machine:
   Run/Stop (F5), Step (F7), Step Over (F8), Step Out (Shift+F8), Scanline+1,
   Frame+1. Tabs: a Prompt (`help`, `break`, `bpr`/`bpw`/`bpin`/`bpout` with

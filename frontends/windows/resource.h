@@ -22,6 +22,7 @@
 #define IDM_FULLSCREEN     1014
 #define IDM_FUJINET_CONFIG 1020
 #define IDM_FUJINET_LOG    1021
+#define IDM_HELP           1039
 #define IDM_ABOUT          1040
 
 /* Controls inside the settings window. */
@@ -42,6 +43,8 @@
 #define IDC_SET_EXT_ADDR   2015
 
 #define IDC_LOG_EDIT       2100
+#define IDC_LOG_HELP       2101
+#define IDC_SET_HELP       2102
 #define IDC_STATUSBAR      2200
 #define IDT_LOG_REFRESH    1
 #define IDT_STATUS         2

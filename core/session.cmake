@@ -12,7 +12,8 @@ set(SMS_SESSION_SOURCES
   src/bindings.c
   src/hid_keys.c
   src/gamepad_sdl.c
-  src/debug.c)
+  src/debug.c
+  src/help.c)
 
 # The embedded ROM table: empty unless WITH_SMS_ROMS (see COMPLIANCE.md).
 set(SMS_ROMS_C "${CMAKE_CURRENT_BINARY_DIR}/roms_embedded.c")
@@ -35,7 +36,21 @@ else()
     VERBATIM)
 endif()
 
-add_library(sms_session STATIC ${SMS_SESSION_SOURCES} "${SMS_ROMS_C}")
+# The Help, embedded: data/help/help.md as topics of styled spans
+# (core/include/smshelp.h), which every frontend lays out with its own
+# toolkit. help_data.h declares the table; the build generates it.
+set(SMS_HELP_C "${CMAKE_BINARY_DIR}/generated/help_content.c")
+add_custom_command(
+  OUTPUT "${SMS_HELP_C}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          --src "${CMAKE_SOURCE_DIR}/data/help/help.md"
+          --out-c "${SMS_HELP_C}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          "${CMAKE_SOURCE_DIR}/data/help/help.md"
+  COMMENT "Help"
+  VERBATIM)
+
+add_library(sms_session STATIC ${SMS_SESSION_SOURCES} "${SMS_ROMS_C}" "${SMS_HELP_C}")
 set_target_properties(sms_session PROPERTIES
   C_STANDARD 11
   POSITION_INDEPENDENT_CODE ON)
