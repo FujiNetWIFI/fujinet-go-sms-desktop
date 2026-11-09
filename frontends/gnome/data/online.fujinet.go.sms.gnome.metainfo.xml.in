@@ -64,8 +64,8 @@
       <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/v0.3.1/data/screenshots/1_running_config.png</image>
     </screenshot>
     <screenshot>
-      <caption>The built-in debugger's live VDP viewer</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/v0.3.1/data/screenshots/2_vdp_debugger.png</image>
+      <caption>The built-in debugger's Video tab</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-sms-desktop/v0.7.0/data/screenshots/2_debugger.png</image>
     </screenshot>
     <screenshot>
       <caption>Preferences: console, display, audio, input and FujiNet</caption>
@@ -76,7 +76,14 @@
     <!-- The CURRENT release templates its version from @PROJECT_VERSION@, so
          it cannot disagree with the tree; past releases are literal. The
          release job checks that this first entry is still a template. -->
-    <release version="@PROJECT_VERSION@" date="2026-11-08">
+    <release version="@PROJECT_VERSION@" date="2026-11-09">
+      <description>
+        <p>
+          Debugger rebuilt like the other FujiNet Go desktops: Console, Disassembly, Memory, Breakpoints, Watches, Cart &amp; I/O, Trace, History, Video, Sound, Symbols and FujiNet tabs, a registers strip with editable flags, breakpoints on memory, ports, video RAM and colour RAM with conditions (value, addr, old), memory search, watches, symbols, and Pop Out. The Video tab redraws video RAM through each line's own scroll and registers, with a pixel inspector, overlays, a colour table and a per-line table. Controllers window with per-port pad mapping.
+        </p>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-11-08">
       <description>
         <p>
           Built-in, searchable Help: Help menu (Ctrl+Shift+H, ⌘? on a Mac) and Help buttons in Preferences, the debugger and the console log open the topic for what they show.

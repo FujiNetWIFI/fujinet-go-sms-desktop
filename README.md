@@ -56,19 +56,26 @@ desktop app. A member of the FujiNet Go desktop family
   shows as it is; the build embeds it and every frontend lays it out natively.
 - **The debugger, in every frontend.** F12 opens it and stops the machine:
   Run/Stop (F5), Step (F7), Step Over (F8), Step Out (Shift+F8), Scanline+1,
-  Frame+1. Tabs: a Prompt (`help`, `break`, `bpr`/`bpw`/`bpin`/`bpout` with
-  conditions over registers, flags, memory and the beam, `print`, `mem`,
-  `poke`, `vram`, `cram`, `vdp`, `sprites`, `psg`, `fm`, `io`, `cart`,
-  `mailbox`, `label`, `runto`, `disasm`, `trace`, `save` … with Tab
-  completion), CPU & RAM (editable, shadow registers included), Disassembly
-  (click to toggle a breakpoint, follow PC, jump to a label), VDP (registers
-  decoded, the name table with the scroll window, the 512 tiles, sprites,
-  palette), Sound & I/O (PSG, YM2413, the memory and I/O control ports, BIOS
-  paging, the pads), Breakpoints, and Cart (mode, mapper and banks, mailbox,
-  load progress, the BIOS snoop). It loads WLA-DX `.sym`, z88dk `.map` and
-  SDCC `.noi` symbols — banked symbols follow the cartridge's mapping — and
-  the ports, vectors, mapper registers and the FujiNet mailbox are labelled
-  out of the box.
+  Frame+1. Twelve tabs and a registers strip (editable, shadow registers and
+  flags included) under all of them: a Console (`help`, `break`, `bpr`/`bpw`/
+  `bpa`/`bpin`/`bpout`/`bpv`/`bpc` with conditions over registers, flags,
+  memory, the beam and `old`, `watch`, `find`, `video`, `trace`, `save` … with
+  Tab completion), Disassembly (red dots, grey when disabled, click to toggle,
+  follow PC, every stop brings it back to the PC), Memory (the full 64K, rows
+  named by what answers there, Go To with ranges, Poke, hex/text search),
+  Breakpoints (execute, read, write, access, ports, video RAM and colour RAM
+  writes; hit counts), Watches (live values, Break on Change), Cart & I/O
+  (mode, mapper and banks, mailbox, the memory map, the control ports, BIOS
+  paging, the pads), Trace and History (a 65536-instruction recording, all /
+  branches only / a range), Video, Sound (PSG, YM2413), Symbols (filter, jump
+  to the address) and FujiNet packets. **Video** redraws video RAM through each
+  scanline's own scroll, registers and colours (Display, Decoded, Beam and
+  Values views, zoom, overlays, a hover/click pixel inspector, the 32 colours
+  with their uses, a per-line table, timing, and Break on writes / Break on
+  CRAM write). Any tab can be popped out into its own window. It loads
+  WLA-DX `.sym`, z88dk `.map` and SDCC `.noi` symbols — banked symbols follow
+  the cartridge's mapping — and the ports, vectors, mapper registers and the
+  FujiNet mailbox are labelled out of the box.
 - **Gamepads that come and go.** SDL3 hot-plug: a pad plugged in while a game
   runs is assigned to the next free player within a second, unplugging
   releases it, and a pad that comes back gets its player back. Which pad
@@ -208,8 +215,12 @@ runs (`pad_assign` in the settings file), as is **Show bindings**
   media and Import BIOS (identified by CRC with filler images whose CRC was
   steered to MAME's table — no Sega code involved); bindings; gamepads; the
   debugger contract (every step kind, every breakpoint class with
-  conditions, registers, memory, VRAM/CRAM, the views, symbols in every
-  format, the trace, Save, the prompt, a power cycle). With the in-process
+  conditions and `old`, registers, memory and its search and map, VRAM/CRAM,
+  the symbols list, the 65536-entry trace and its filters, Save, the prompt, a
+  power cycle), the watch and range helpers (`memtools_test`) and the Video
+  tab's controller (`vidtab_test`: synthetic frames with a mid-frame scroll and
+  palette split, fuzzed; and against live sessions, the decoded screen equals
+  the machine's picture pixel for pixel). With the in-process
   FujiNet: the link (`fujibus_smoke`), CONFIG driven like a user — SD host,
   the image, OPEN/BOOT, FujiNet pushes it, it runs (`config_boot`) — and
   the bring-up's fujiboot → `hello.sms` network boot with the mailbox on its
@@ -218,7 +229,10 @@ runs (`pad_assign` in the settings file), as is **Show bindings**
 - **GNOME and KDE** — built together with no frontend warnings, desktop and
   metainfo files validated, and smoke-launched headless (GTK Broadway, Qt
   offscreen) with the debugger, Controllers and Preferences open; every
-  window and debugger tab was rendered to an image and looked at.
+  window and debugger tab was rendered to an image and looked at; the KDE
+  window also has a test (`debugger_kde`) that drives every tab, breakpoint
+  type, the watch and symbol flows, trace/history, pop-out and the Video tab
+  against a real session.
 - **Windows** — the Win32 frontend cross-builds with mingw-w64 with no
   warnings, the core and session tests pass under Wine, and CI builds and
   tests it natively with MSYS2/UCRT64 — including `config_boot` against the
