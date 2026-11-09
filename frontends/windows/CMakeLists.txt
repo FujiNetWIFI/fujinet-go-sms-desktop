@@ -24,6 +24,7 @@ add_executable(fujinet-go-sms-windows WIN32
   display.c
   controllers/controllers_window.c
   debugger/dbg_window.c
+  debugger/dbg_video.c
   resource.rc
 )
 target_include_directories(fujinet-go-sms-windows PRIVATE
