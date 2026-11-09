@@ -27,12 +27,13 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
     "main", "import-sd", "controllers", "fujilog", "prefs/Machine", "prefs/Input",
-    "debugger/prompt", "debugger/cpu", "debugger/disassembly", "debugger/vdp",
-    "debugger/io", "debugger/breakpoints", "debugger/cart", "debugger/fujinet",
+    "debugger/console", "debugger/disassembly", "debugger/memory", "debugger/breakpoints",
+    "debugger/watches", "debugger/cart", "debugger/trace", "debugger/history",
+    "debugger/video", "debugger/sound", "debugger/symbols", "debugger/fujinet",
 };
 
 /* The prompt's commands (core/include/smsdebug.h). */
-static const char *const debug_commands[] = { "break", "bpr", "bpw", "bpin", "bpout", "print", "mem", "poke", "vram", "cram", "vdp", "sprites", "psg", "fm", "io", "cart", "mailbox", "label", "runto", "disasm", "trace", "save" };
+static const char *const debug_commands[] = { "break", "bpr", "bpw", "bpin", "bpout", "print", "mem", "poke", "vram", "cram", "vdp", "sprites", "psg", "fm", "io", "cart", "mailbox", "label", "runto", "disasm", "trace", "save", "bpa", "bpv", "bpc", "watch", "unwatch", "find", "video" };
 
 /* The Preferences pages: what each one has, as the frontends label it. */
 static const struct {
@@ -217,7 +218,7 @@ static void
 check_debugger(int p)
 {
     int t, b;
-    CHECK(smshelp_find("debugger/prompt", &t, &b) == 0, "no debugger/prompt");
+    CHECK(smshelp_find("debugger/console", &t, &b) == 0, "no debugger/console");
     const smshelp_topic *tp = smshelp_topic_at(t);
     int end = smshelp_section_end(t, b);
     for (size_t k = 0; k < sizeof debug_commands / sizeof *debug_commands; k++) {
@@ -240,8 +241,21 @@ check_debugger(int p)
             misses++;
         }
     }
-    /* the eight tabs */
-    require(p, "debugger", "tabs", "eight tabs");
+    /* the twelve tabs */
+    require(p, "debugger", "tabs", "twelve tabs");
+    require(p, "debugger/video", "views", "Display");
+    require(p, "debugger/video", "views", "Decoded");
+    require(p, "debugger/video", "views", "Beam");
+    require(p, "debugger/video", "views", "Values");
+    require(p, "debugger/video", "zoom", "Fit");
+    require(p, "debugger/video", "overlays", "Overlays");
+    require(p, "debugger/video", "inspector", "Pixel");
+    require(p, "debugger/video", "sections", "Registers");
+    require(p, "debugger/video", "sections", "Colours");
+    require(p, "debugger/video", "sections", "Lines");
+    require(p, "debugger/video", "sections", "Timing");
+    require(p, "debugger/video", "break", "Break on writes");
+    require(p, "debugger/video", "break", "Break on CRAM write");
 }
 
 int

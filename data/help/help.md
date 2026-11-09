@@ -456,7 +456,9 @@ key).
 # Debugger
 
 The Debugger (<kbd>F12</kbd>) stops the console and shows what it is doing.
-It has eight tabs; closing it lets the console go on as it was.
+It has twelve tabs; closing it lets the console go on as it was. The Z80's
+registers and flags sit in a strip under the tabs: edit a value while stopped
+and press <kbd>Enter</kbd>.
 
 | Button | Does |
 |---|---|
@@ -466,71 +468,160 @@ It has eight tabs; closing it lets the console go on as it was.
 | Step Out (<kbd>Shift+F8</kbd>) | On until the routine returns |
 | Scanline+1 | On to the next scanline |
 | Frame+1 | On to the next frame |
+| Clear Breakpoints | Removes every breakpoint |
+| Break at | A symbol name or hex address, then <kbd>Enter</kbd> |
+| Load Symbols | Reads a WLA-DX `.sym`, z88dk `.map`, SDCC `.noi` or plain list |
+| Clear Symbols | Drops loaded symbols, keeping the built-ins |
+| Save | Saves the disassembly, memory, VRAM, CRAM or registers to a file |
+| Pop Out | Moves the tab that shows into a window of its own; **Dock** in that window puts it back |
 | Help | Opens the topic of the tab that shows |
 
-<!-- context: debugger/prompt -->
-## Prompt
+Every stop brings the views back to where the machine is, even if you had
+scrolled away, and the line at the top says why it stopped.
 
-The Prompt takes commands, with completion on <kbd>Tab</kbd>. Conditions run
+<!-- context: debugger/console -->
+## Console
+
+The Console takes commands, with completion on <kbd>Tab</kbd>. Conditions run
 over registers, flags, memory and the beam. `help` lists the commands.
 
 | Command | Does |
 |---|---|
 | `break` | An execute breakpoint |
-| `bpr`, `bpw` | Memory reads or writes |
+| `bpr`, `bpw`, `bpa` | Memory reads, writes, or both |
 | `bpin`, `bpout` | I/O port reads or writes |
+| `bpv`, `bpc` | Writes to video RAM or colour RAM |
 | `print` | Evaluates an expression |
 | `mem`, `poke` | Dumps memory; writes bytes |
 | `vram`, `cram`, `vdp` | The VDP's video RAM, colour RAM and registers |
+| `video` | The Video tab as text: `video colours`, `video lines` |
 | `sprites` | The sprites |
 | `psg`, `fm` | The PSG and the YM2413 |
-| `io` | The I/O ports |
+| `io` | The I/O ports and the memory map |
 | `cart`, `mailbox` | The cartridge, and FujiNet's mailbox |
 | `label` | Name an address |
 | `runto` | Runs to an address |
 | `disasm` | Disassembles |
 | `trace` | The instruction trace |
+| `watch`, `unwatch` | The watch list: `watch score`, `unwatch 0` |
+| `find` | Searches memory for bytes (`find 3E 5A`) or text (`find text HELLO`) |
 | `save` | Saves state to a file |
-
-<!-- context: debugger/cpu -->
-## CPU and RAM
-
-The Z80's registers and flags, the shadow registers included, and an editable
-hex view of memory. Click a value to edit it while stopped.
 
 <!-- context: debugger/disassembly -->
 ## Disassembly
 
-The Z80 disassembled at the PC, with the opcode bytes, labels and the
-breakpoints in the margin. Click a line to toggle its breakpoint. Follow PC
-keeps the current line in view. Symbols load from WLA-DX `.sym`, z88dk `.map`
-and SDCC `.noi` files; banked symbols follow the cartridge's mapping. The
-ports, vectors, mapper registers and the FujiNet mailbox are labelled out of
-the box.
+The Z80 disassembled at the PC, with the opcode bytes and labels. The current
+instruction is in the app's accent colour and a breakpoint is a red dot in the
+margin (a grey hollow one when it is disabled); click a line to toggle its
+breakpoint. **Follow PC** keeps the current line in view. Symbols load from
+WLA-DX `.sym`, z88dk `.map` and SDCC `.noi` files; banked symbols follow the
+cartridge's mapping. The ports, vectors, mapper registers and the FujiNet
+mailbox are labelled out of the box.
 
-<!-- context: debugger/vdp -->
-## VDP
+<!-- context: debugger/memory -->
+## Memory
 
-The VDP's registers decoded, the name table with the scroll window, the 512
-tiles, the sprites and the palette.
-
-<!-- context: debugger/io -->
-## Sound and I/O
-
-The PSG, the YM2413, the memory and I/O control ports, the BIOS paging and the
-pads.
+The 64K the Z80 sees, 16 bytes to a row, each row labelled with what answers
+there (the BIOS, a cartridge bank, RAM and its mirror, the mapper registers).
+**Go To** takes an address, a label, an expression or a range (`$C000-$C0FF`,
+`score..score+3`) and highlights what it found. **Poke** writes bytes. The
+search bar finds hex bytes (`3E 5A`) or text (not case-sensitive) with **Find
+Next** and **Find Previous**, wrapping once; the machine has to be stopped.
 
 <!-- context: debugger/breakpoints -->
 ## Breakpoints
 
-The list of breakpoints with their conditions. **Add**, **Remove**, and the
-check box to turn one off.
+Every breakpoint and watchpoint. **Add** one with a type, an address or range
+and, if you like, a condition:
+
+- **Execute** stops before an instruction runs.
+- **Read**, **Write** and **Access** (both) stop after the instruction that
+  touched memory, and the line at the top says what it did, for instance
+  `wrote $C010 = $41 (was $40)`.
+- **IN** and **OUT** take a port number (0 to 255).
+- **VRAM write** takes a video RAM address ($0000 to $3FFF) and **CRAM write** a
+  colour RAM entry (0 to 31); they stop after the instruction that wrote it.
+
+A condition can use `value` and `addr`, and `old`, what was there before:
+`value != old` stops only when a write changes something. The box beside each
+entry turns it off, and the list shows how many times it fired. **Clear Hits**
+zeroes the counts and **Clear Breakpoints** removes them all.
+
+<!-- context: debugger/watches -->
+## Watches
+
+Things to keep an eye on: type an address, a symbol, an expression or a range
+and press <kbd>Enter</kbd>. Each shows its value while the machine is stopped
+(`-` while it runs, `?` if it means nothing yet, which a later **Load Symbols**
+may fix). **Show in Memory** jumps to it in the Memory tab, **Break on Change**
+adds a Write breakpoint that fires when its value changes, and **Remove**
+drops it.
 
 <!-- context: debugger/cart -->
-## Cart
+## Cart and I/O
 
-The cartridge: the mode, the mapper and its banks, the mailbox, the load
-progress and the BIOS snoop.
+The cartridge: its file, the mode, the mapper and its banks, the mailbox, the
+load progress and the BIOS snoop. Under it the memory map as the console sees
+it, then the memory and I/O control ports, the BIOS paging and the pads.
+
+<!-- context: debugger/trace -->
+## Trace
+
+Every instruction the Z80 runs, live. **Record** turns it on (it slows the
+console a little, so it starts off), **Clear** empties it, **Branches only**
+shows just the jumps, calls and returns, and **In range** only a range of
+addresses. Trace and History share one recording.
+
+<!-- context: debugger/history -->
+## History
+
+The same recording, read at a stop: the lead-up to a breakpoint or a pause,
+newest at the bottom, with the registers at each instruction. Turn **Record**
+on before you run to the place you want to look at.
+
+<!-- context: debugger/video -->
+## Video
+
+The VDP, with the picture on the left and five sections on the right. Games
+change the scroll, the registers and the colours between lines (a status bar
+that stays still while the playfield scrolls), so the console records what each
+line was drawn with and the views use it.
+
+| View | Shows |
+|---|---|
+| Display | The last finished frame, as the screen showed it |
+| Decoded | Video RAM drawn through each line's own registers; a chooser picks the screen, the name table, the tiles (background or sprite palette), the sprites or the palette |
+| Beam | Stopped only: this frame as far as the beam has drawn it, the last one dimmed below |
+| Values | The raw colour indexes, cool for the background palette and warm for the sprite palette |
+
+**Zoom** goes from 1 to 16 times, or **Fit**. **Overlays** switch on a grid of
+tiles, the scroll window, the lines where a line interrupt fires, the beam, the
+video RAM bytes written lately (they fade), the bytes that changed since the
+last refresh, the outline of the active display, and a box on every sprite.
+
+Point at a pixel to see it in **Pixel**: its name table entry and address, the
+tile and its pattern address, the palette and colour, the sprite that owns it
+and the scroll it was drawn with. Click to pin it, click again to let go.
+Double-click it, or press **Break on writes**, to stop the machine when anything
+writes that tile or entry.
+
+**Registers** decodes R0 to R10 and the status; one that changed in the last
+few refreshes is highlighted. **Colours** shows the 32 colour RAM entries with
+the pixels that use them; **Break on CRAM write** stops the machine when one is
+written. **Lines** lists the lines where the scroll, the registers or the
+colours change. **Timing** shows the beam.
+
+<!-- context: debugger/sound -->
+## Sound
+
+The PSG's three tones and noise, and the YM2413's registers when the console
+has one.
+
+<!-- context: debugger/symbols -->
+## Symbols
+
+Every known symbol, the built-ins and the ones you loaded. **Filter** narrows
+the list, and activating a row goes to that address in the Disassembly.
 
 <!-- context: debugger/fujinet -->
 ## FujiNet packets
