@@ -37,6 +37,7 @@ add_executable(fujinet-go-sms-gnome
   help/help_window.c
   controllers/controllers_window.c
   debugger/dbg_window.c
+  debugger/dbg_video.c
 )
 target_link_libraries(fujinet-go-sms-gnome
   PRIVATE sms_session PkgConfig::GTK4 PkgConfig::ADW m)
