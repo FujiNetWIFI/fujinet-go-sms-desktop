@@ -29,7 +29,7 @@
 
 #include "help/help_window.h"
 #include "smssession.h"
-#include "controllers/controller_window.h"
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "key_forward.h"
@@ -97,6 +97,7 @@ static void restart_session(void)
     if (smssession_restart(g_session) != 0)
         MessageBoxA(g_hwnd, smssession_last_error(g_session), "Could not start",
                     MB_ICONWARNING | MB_OK);
+    sms_controller_window_gamepads_changed();   /* the console may have changed */
     update_status();
 }
 
@@ -204,6 +205,14 @@ static void draw_status_dot(const DRAWITEMSTRUCT *di)
     Ellipse(di->hDC, x, y, x + size + 1, y + size + 1);
     SelectObject(di->hDC, oldp);
     SelectObject(di->hDC, oldb);
+}
+
+/* A short message in the status bar, for a few seconds. */
+static void notice(const char *text)
+{
+    snprintf(g_pad_notice, sizeof g_pad_notice, "%s", text);
+    g_pad_notice_until = GetTickCount() + PAD_NOTICE_MS;
+    update_status();
 }
 
 /* Gamepad hot-plug: the session bumps a generation on every add/remove and
@@ -503,6 +512,15 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_SET_HELP: sms_help_for(hwnd); return 0;
+        case IDC_SET_HELP_INPUT: sms_help_show(hwnd, "prefs/Input"); return 0;
+        case IDC_SET_RESET_CONTROLS:
+            smssession_bindings_reset(g_session);
+            sms_controller_window_gamepads_changed();    /* its legends */
+            notice("Controls reset to defaults");
+            return 0;
+        case IDC_SET_OPEN_CONTROLLERS:
+            sms_controller_window_show(g_hwnd, g_session);
+            return 0;
         case IDC_SET_CONSOLE:
             if (HIWORD(wp) == CBN_SELCHANGE) {
                 const int c = (int)SendMessageA(GetDlgItem(hwnd, IDC_SET_CONSOLE), CB_GETCURSEL, 0, 0);
@@ -672,6 +690,7 @@ static void show_settings(HINSTANCE inst)
     const DWORD style = WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
     HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     HWND h;
+    HWND btn;
     RECT want;
     char line[200];
     int y = 12;
@@ -734,7 +753,11 @@ static void show_settings(HINSTANCE inst)
     SendMessageA(h, TBM_SETPOS, TRUE, (LPARAM)smssession_get_int(g_session, "volume", 100));
     y += 40;
 
-    settings_label(g_settings_window, inst, "Input", 16, y, 440, 18); y += 22;
+    settings_label(g_settings_window, inst, "Input", 16, y, 400, 18);
+    btn = CreateWindowExA(0, "BUTTON", "?", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        430, y - 3, 24, 22, g_settings_window, (HMENU)(INT_PTR)IDC_SET_HELP_INPUT, inst, NULL);
+    SendMessageA(btn, WM_SETFONT, (WPARAM)font, TRUE);
+    y += 22;
     settings_checkbox(g_settings_window, inst, "Enable gamepads (applied when this window closes)", IDC_SET_GAMEPAD,
                       16, y, 400, smssession_get_int(g_session, "enable_gamepad", 1));
     y += 26;
@@ -755,6 +778,17 @@ static void show_settings(HINSTANCE inst)
     SendMessageA(g_pad_port, WM_SETFONT, (WPARAM)font, TRUE);
     refresh_pad_list();
     y += 80;
+    btn = CreateWindowExA(0, "BUTTON", "Reset Controls", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        16, y, 110, 26, g_settings_window, (HMENU)(INT_PTR)IDC_SET_RESET_CONTROLS, inst, NULL);
+    SendMessageA(btn, WM_SETFONT, (WPARAM)font, TRUE);
+    btn = CreateWindowExA(0, "BUTTON", "Open Controllers", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        134, y, 120, 26, g_settings_window, (HMENU)(INT_PTR)IDC_SET_OPEN_CONTROLLERS, inst, NULL);
+    SendMessageA(btn, WM_SETFONT, (WPARAM)font, TRUE);
+    y += 32;
+    settings_label(g_settings_window, inst,
+                   "Keys and gamepad buttons are mapped in the Controllers window (F9): press Map, choose a "
+                   "control, then press the key or gamepad button.", 16, y, 440, 34);
+    y += 44;
 
     settings_label(g_settings_window, inst, "FujiNet", 16, y, 440, 18); y += 22;
     settings_checkbox(g_settings_window, inst, "Enable FujiNet (applied when this window closes)", IDC_SET_FUJINET,
@@ -776,7 +810,7 @@ static void show_settings(HINSTANCE inst)
     else
         snprintf(line, sizeof line, "Web UI: %s", smssession_fujinet_webui_url(g_session));
     settings_label(g_settings_window, inst, line, 16, y + 3, 440, 18);
-    y += 32;
+    y += 32 + 38;       /* and the Help button below it */
 
     /* Exactly tall enough for what is in it. */
     SetRect(&want, 0, 0, 468, y);
@@ -954,6 +988,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         uint32_t ks;
         int sa;
         const int ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (sms_controller_map_key(msg, wp, lp)) return 0;
         if (wp == VK_F9) { sms_controller_window_toggle(hwnd, g_session); return 0; }
         if (wp == VK_F12) { sms_debugger_toggle(hwnd, g_session); return 0; }
         if (wp == VK_F11) { toggle_fullscreen(hwnd); return 0; }
@@ -983,6 +1018,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYUP: case WM_SYSKEYUP: {
         uint32_t ks = sms_keysym_from_msg(wp, lp);
         int sa;
+        if (sms_controller_map_key(msg, wp, lp)) return 0;
         if (!ks) break;
         sa = smssession_key_sysaction(g_session, ks);
         if (sa >= 0) { g_sysact_down[sa] = 0; return 0; }
@@ -1204,7 +1240,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     g_pad_generation = smssession_gamepad_generation(g_session);
     SetTimer(g_hwnd, IDT_STATUS, 1000, NULL);
-    SetTimer(g_hwnd, IDT_SYSACT, 100, NULL);
+    SetTimer(g_hwnd, IDT_SYSACT, 50, NULL);
     update_status();
 
     if (env_on("SMS_OPEN_CONTROLLERS")) sms_controller_window_toggle(g_hwnd, g_session);

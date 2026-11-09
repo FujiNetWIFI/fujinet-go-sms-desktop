@@ -22,7 +22,7 @@ add_executable(fujinet-go-sms-windows WIN32
   main.c
   help/help_window.c
   display.c
-  controllers/controller_window.c
+  controllers/controllers_window.c
   debugger/dbg_window.c
   resource.rc
 )
