@@ -44,10 +44,14 @@ int  smsdebug_is_attached(smsdebug *d);
 int  smsdebug_is_stopped(smsdebug *d);
 void smsdebug_stop(smsdebug *d);         /* break at the next instruction */
 void smsdebug_resume(smsdebug *d);       /* "run" */
-/* Why the machine last stopped ("stopped", "breakpoint: exec $0038",
- * "write $C000 = $12", "step", "frame", ...) and the PC, -1 if none.
+/* Why the machine last stopped ("stopped at $0038", "breakpoint: exec $0038",
+ * "write $C000 = $12", "step at $0006", "frame at $0010", ...) and the PC,
+ * -1 if none. A reason without an address of its own gets " at $xxxx".
  * Returns length. */
 int  smsdebug_stop_reason(smsdebug *d, char *dst, int dstsz, int *address);
+/* Bumped by every stop (pause, breakpoint, step); frontends recentre their
+ * views on the PC when it changes. */
+uint64_t smsdebug_stop_serial(smsdebug *d);
 /* Bumped whenever a command ran or the machine stopped/resumed, so a window
  * knows when to refresh. */
 unsigned smsdebug_generation(smsdebug *d);
@@ -55,16 +59,17 @@ unsigned smsdebug_generation(smsdebug *d);
 /* ---- the prompt ------------------------------------------------------------ */
 /* Run one command; "help" lists them: step [n], over, out, frame [n],
  * scanline [n], run, stop, runto <addr>, break <addr> [cond], bpr/bpw
- * <addr>[-<end>] [cond], bpin/bpout <port>[-<end>] [cond], delete <id|addr>,
+ * <addr>[-<end>] [cond], bpa <addr>[-<end>] [cond] (read or write), bpin/bpout <port>[-<end>] [cond], bpv <vram addr>[-<end>] [cond], bpc
+ * <cram index>[-<end>] [cond], delete <id|addr>,
  * enable/disable <id>, clear, breaks, print <expr>, regs, set <reg> <expr>,
  * mem <addr> [len], poke <addr> <val...>, vram <addr> [len], vpoke <addr>
  * <val...>, cram, vdp, sprites, psg, fm, io, cart, mailbox, label <addr>
- * <name>, labels [file], disasm [addr] [n], trace [on|off|n], save <kind>
- * <file>. Expressions: numbers ($C000, 0xC000, C000h, 49152), registers
+ * <name>, labels [file], disasm [addr] [n], trace [on|off|n], watch [expr], unwatch <n|all>, find [hex] <bytes> | find
+ * text <string>, save <kind> <file>. Expressions: numbers ($C000, 0xC000, C000h, 49152), registers
  * (a f b c d e h l af bc de hl ix iy sp pc i r, primed af' ...), flags (cf
  * zf sf hf pf nf), [addr] byte and {addr} word reads, labels, vpos hpos
- * vcount hcount frame cycles, and in a breakpoint condition `value` and
- * `addr` for the access; C operators with C precedence.
+ * vcount hcount frame cycles, and in a breakpoint condition `value`, `addr` and
+ * `old` (the byte before a write) for the access; C operators with C precedence.
  * Output text into dst; returns its length. */
 int  smsdebug_command(smsdebug *d, const char *command, char *dst, int dstsz);
 /* Completions for a prefix (commands, registers and labels), one per line.
@@ -197,7 +202,8 @@ void smsdebug_cram_write(smsdebug *d, int index, uint8_t value);
 typedef struct {
     uint16_t address;
     int is_pc;
-    int has_breakpoint;
+    int has_breakpoint;      /* an enabled execute breakpoint covers it */
+    int bp_disabled;         /* only a disabled one does (the grey dot) */
     int length;
     char bytes[16];
     char label[48];
@@ -237,6 +243,7 @@ typedef struct {
     int ram_enabled, ram_writable;
     uint32_t image_size, image_crc, ram_size;
     int claim;
+    char path[1024];         /* the cartridge file the session opened, or "" */
     int16_t page_bank[48];   /* the 8K SRAM bank behind each 1K page, -1 = cart memory */
     int load_state, load_win, load_nwin, load_pct;
     int boot_state, boot_pct, boot_err;
@@ -271,12 +278,19 @@ int  smsdebug_fujinet_state(smsdebug *d, char *dst, int dstsz);
 /* ---- breakpoints -------------------------------------------------------------- */
 typedef enum {
     SMSDEBUG_BP_EXEC = 1, SMSDEBUG_BP_READ = 2, SMSDEBUG_BP_WRITE = 4,
-    SMSDEBUG_BP_IN = 8, SMSDEBUG_BP_OUT = 16
+    SMSDEBUG_BP_IN = 8, SMSDEBUG_BP_OUT = 16,
+    /* VDP data-port stores: start/end is a VRAM address ($0000-$3FFF) or a
+     * CRAM index (0-31). A condition sees `value`, `addr` and `old`; the
+     * stop comes at the instruction after the OUT. */
+    SMSDEBUG_BP_VRAM = 32, SMSDEBUG_BP_CRAM = 64,
+    /* Read and write as one entry ("Access"): READ | WRITE */
+    SMSDEBUG_BP_ACCESS = 6
 } smsdebug_bp_type;
 typedef struct {
     int id;
     int type;                /* smsdebug_bp_type bits */
-    uint16_t start, end;     /* a port range for IN/OUT (0-255) */
+    uint16_t start, end;     /* a port range for IN/OUT (0-255), a VRAM address or
+                                CRAM index range for VRAM/CRAM */
     int enabled;
     unsigned hits;
     char condition[128];
@@ -292,6 +306,21 @@ void smsdebug_breakpoint_remove(smsdebug *d, int id);
 void smsdebug_breakpoint_enable(smsdebug *d, int id, int enabled);
 int  smsdebug_breakpoint_list(smsdebug *d, smsdebug_breakpoint *out, int max);
 void smsdebug_breakpoint_clear(smsdebug *d);
+/* Zero every hit count. */
+void smsdebug_breakpoint_clear_hits(smsdebug *d);
+
+/* ---- symbols (built-ins and loaded, for a Symbols tab) ---------------------- */
+int  smsdebug_symbols_count(smsdebug *d);
+/* Entry `index` (0 .. count-1): address, name and the 16K ROM bank (-1 =
+ * any). Returns 1, or 0 past the end. The order is the table's; it can
+ * change when symbols are loaded, cleared or looked up. */
+int  smsdebug_symbols_get(smsdebug *d, int index, uint16_t *addr, char *name,
+                          int namesz, int *bank);
+/* Indices of the entries whose name contains `text` (case-insensitive; empty
+ * matches all), ordered by address then name. Returns the count written. */
+int  smsdebug_symbols_filter(smsdebug *d, const char *text, int *out, int max);
+/* Drop every loaded symbol and user label; the built-ins stay. */
+void smsdebug_clear_symbols(smsdebug *d);
 
 /* ---- the trace ring ----------------------------------------------------------- */
 typedef struct {
@@ -299,12 +328,46 @@ typedef struct {
     uint8_t len, bytes[4];
     uint64_t cycles;
     int16_t vpos, hpos;
+    int16_t bank;            /* the 16K ROM bank mapped at pc, -1 when none / RAM */
 } smsdebug_trace;
+/* The ring keeps the newest 65536; it is allocated on the first enable. */
 void smsdebug_trace_enable(smsdebug *d, int on);
 int  smsdebug_trace_enabled(smsdebug *d);
 /* Newest first; returns entries copied. */
 int  smsdebug_trace_read(smsdebug *d, smsdebug_trace *out, int max);
 void smsdebug_trace_clear(smsdebug *d);
+/* Entries held. */
+int  smsdebug_trace_count(smsdebug *d);
+/* "0006  IN A,($DC)  AF=.... BC=.... DE=.... HL=.... SP=....". Returns the length. */
+int  smsdebug_trace_format(const smsdebug_trace *t, char *dst, int dstsz);
+enum { SMSDEBUG_TRACE_ALL = 0, SMSDEBUG_TRACE_BRANCHES, SMSDEBUG_TRACE_RANGE };
+/* 1 if the entry passes the filter (BRANCHES: jumps, calls, returns;
+ * RANGE: pc in lo..hi). */
+int  smsdebug_trace_match(const smsdebug_trace *t, int filter, uint16_t lo,
+                          uint16_t hi);
+
+/* ---- memory search and the memory map ---------------------------------------- */
+#define SMSDEBUG_SEARCH_NOCASE 1
+/* Stopped only (-1 while running). Finds up to max start addresses in
+ * from..to of the CPU's 64K as mapped now, where (mem & mask) == (pat & mask)
+ * for all n bytes. Returns the count. */
+int  smsdebug_search(smsdebug *d, const uint8_t *pat, int n, uint8_t mask,
+                     int flags, uint16_t from, uint16_t to, uint16_t *out,
+                     int max);
+/* The next match after `from` (before it if backward), wrapping once.
+ * Returns 1 and *found, 0 for none, -1 while running. */
+int  smsdebug_search_next(smsdebug *d, const uint8_t *pat, int n, uint8_t mask,
+                          int flags, uint16_t from, int backward, uint16_t *found);
+
+typedef struct {
+    uint16_t lo, hi;
+    int readable, writable;
+    char name[48];
+} smsdebug_region;
+/* Ordered, non-overlapping regions covering $0000-$FFFF as mapped now: the
+ * BIOS / cartridge slots with their banks, RAM, its mirror, the mapper
+ * registers. Returns the count. */
+int  smsdebug_memory_map(smsdebug *d, smsdebug_region *out, int max);
 
 /* ---- files -------------------------------------------------------------------- */
 /* Save with the path a native file picker supplied. kind: "dis" (the

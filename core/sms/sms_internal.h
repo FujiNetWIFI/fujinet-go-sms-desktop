@@ -38,6 +38,7 @@
 #include "z80/z80.h"
 
 #include "fm.h"
+#include "smsvidline.h"
 #include "fujinet_cart.h"
 
 #ifdef __cplusplus
@@ -215,6 +216,9 @@ typedef struct sms_vdp {
     void (*csync_cb)(void *user);
     void *cb_user;
 
+    /* what each fb row was drawn with (the debugger's Video tab) */
+    smsvid_line line_regs[SMS_FB_MAX_HEIGHT];
+
     /* the framebuffer: visible rows only, MAME's visible columns */
     uint32_t fb[SMS_FB_WIDTH * SMS_FB_MAX_HEIGHT];
 } sms_vdp_t;
@@ -343,11 +347,15 @@ struct sms_machine {
 #define SMS_WATCH_MEMW 0x02
 #define SMS_WATCH_IOR  0x04
 #define SMS_WATCH_IOW  0x08
+#define SMS_WATCH_VRAMW 0x10   /* VDP data-port stores, fired BEFORE the store */
+#define SMS_WATCH_CRAMW 0x20
 
 #define SMS_BUS_MEMR 1
 #define SMS_BUS_MEMW 2
 #define SMS_BUS_IOR  4
 #define SMS_BUS_IOW  8
+#define SMS_BUS_VRAMW 16       /* addr = VRAM address, data = value */
+#define SMS_BUS_CRAMW 32       /* addr = CRAM index */
 
 /* machine.c */
 /* Power on: everything comes up fresh. `bios` (bios_size bytes, or NULL) is

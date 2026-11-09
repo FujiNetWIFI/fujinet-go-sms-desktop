@@ -1167,6 +1167,26 @@ static void draw_scanline(sms_vdp_t *v, int param)
 
     update_palette(v);
 
+    /* what this row is drawn with, for the debugger's Video tab */
+    {
+        const int fy = v->vpos - v->vis_y0;
+        if (fy >= 0 && fy < v->fb_height)
+        {
+            smsvid_line *L = &v->line_regs[fy];
+            memcpy(L->reg, v->reg, sizeof L->reg);
+            L->x_scroll = v->reg8copy;
+            L->y_scroll = v->reg9copy;
+            L->flags = (uint8_t)((v->display_disabled ? SMSVID_FLAG_BLANK : 0) |
+                                 (v->n_int_state == 0 ? SMSVID_FLAG_INT : 0));
+            L->mode = (uint8_t)v->vdp_mode;
+            L->line_counter = v->line_counter;
+            L->valid = 1;
+            L->y_pixels = (uint16_t)v->y_pixels;
+            L->line = (int16_t)line;
+            memcpy(L->cram, v->CRAM, sizeof L->cram);
+        }
+    }
+
     /* Sprite processing is restricted because collisions on top border of
      * extended resolution break the scoreboard of Fantasy Dizzy (SMS) on
      * smspal driver */

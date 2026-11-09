@@ -550,7 +550,23 @@ static void vdp_write(sms_machine_t *m, uint8_t port, uint8_t data, uint64_t sta
     if (port & 1)
         sms_vdp_control_write(&m->vdp, data, stamp);
     else
+    {
+        /* the debugger's VRAM / CRAM write breakpoints: told before the
+         * store, so it can read the byte being replaced */
+        if (m->watch & (SMS_WATCH_VRAMW | SMS_WATCH_CRAMW))
+        {
+            if (m->vdp.addrmode == 3)
+            {
+                if (m->watch & SMS_WATCH_CRAMW)
+                    m->bus_hook(m, m->bus_hook_user, SMS_BUS_CRAMW,
+                                (uint16_t)(m->vdp.addr & (SMS_CRAM_SIZE - 1)), data);
+            }
+            else if (m->watch & SMS_WATCH_VRAMW)
+                m->bus_hook(m, m->bus_hook_user, SMS_BUS_VRAMW,
+                            (uint16_t)(m->vdp.addr & 0x3fff), data);
+        }
         sms_vdp_data_write(&m->vdp, data);
+    }
 }
 
 static uint8_t sg1000m3_peripheral_r(sms_machine_t *m, unsigned offset)

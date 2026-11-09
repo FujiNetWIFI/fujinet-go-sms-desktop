@@ -49,6 +49,16 @@ add_test(NAME dasm COMMAND dasm_test)
 sms_test(vdp_decode_test vdp_decode_test.c)
 add_test(NAME vdp_decode COMMAND vdp_decode_test)
 
+# The debugger's memory tools: search parsing, the watch list, trace
+# filters and breakpoint descriptions. Pure.
+sms_test(memtools_test memtools_test.c)
+add_test(NAME memtools COMMAND memtools_test)
+
+# The Video tab controller on synthetic captures: per-row scroll / palette
+# splits, sprites, the inspector's addresses, TMS fallback, and a fuzz.
+sms_test(vidtab_test vidtab_test.c)
+add_test(NAME vidtab COMMAND vidtab_test)
+
 # The debugger's FujiNet trace on byte streams built in the test: both
 # directions, split frames, a send dropping a cut-short reply, repeats and
 # repeated exchanges counted as one, the ring's limit and Clear.

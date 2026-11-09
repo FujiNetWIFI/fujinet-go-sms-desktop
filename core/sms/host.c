@@ -13,6 +13,7 @@
  */
 
 #include "host.h"
+#include "smsvidcap.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -175,6 +176,91 @@ int sms_host_frame_copy(uint32_t *dst, int *height, uint64_t *serial_inout)
         *serial_inout = s_frame_serial;
     }
     pthread_mutex_unlock(&s_frame_lock);
+    return changed;
+}
+
+/* ---- once-a-frame capture for the debugger's Video tab ---- */
+_Static_assert(SMSVID_FB_W == SMS_FB_WIDTH && SMSVID_FB_MAXH == SMS_FB_MAX_HEIGHT,
+               "smsvidcap.h's framebuffer size must match the VDP's");
+
+static pthread_mutex_t s_cap_lock = PTHREAD_MUTEX_INITIALIZER;
+static smsvid_capture *s_cap;               /* allocated by the first enable */
+static atomic_int s_cap_users;
+
+void sms_host_capture_enable(int on)
+{
+    if (on)
+    {
+        pthread_mutex_lock(&s_cap_lock);
+        if (!s_cap)
+            s_cap = calloc(1, sizeof *s_cap);
+        pthread_mutex_unlock(&s_cap_lock);
+        atomic_fetch_add(&s_cap_users, 1);
+    }
+    else if (atomic_load(&s_cap_users) > 0)
+        atomic_fetch_sub(&s_cap_users, 1);
+}
+
+void sms_host_capture_fill(const sms_machine_t *m, struct smsvid_capture *dst)
+{
+    const sms_vdp_t *v = &m->vdp;
+    const int h = v->fb_height;
+
+    memcpy(dst->snap.vram, v->vram, sizeof dst->snap.vram);
+    memcpy(dst->snap.cram, v->CRAM, sizeof dst->snap.cram);
+    memcpy(dst->snap.reg, v->reg, sizeof dst->snap.reg);
+    dst->snap.mode = v->vdp_mode;
+    dst->snap.y_pixels = v->y_pixels;
+    dst->snap.kind_5246 = v->kind == SMS_VDP_5246;
+    memcpy(dst->snap.pens, v->pens, sizeof dst->snap.pens);
+    memcpy(dst->lines, v->line_regs, sizeof dst->lines);
+    memcpy(dst->fb, v->fb, (size_t)SMS_FB_WIDTH * (size_t)h * sizeof dst->fb[0]);
+    dst->fb_height = h;
+    dst->is_pal = v->is_pal;
+    dst->total_lines = v->lines;
+    dst->vpos = sms_vdp_beam_vpos(v, m->cycles);
+    dst->hpos = sms_vdp_beam_hpos(v, m->cycles);
+    dst->vcount = sms_vdp_vcount_read(v, m->cycles);
+    dst->hcount = v->hcounter;
+    dst->beam_row = dst->vpos - v->vis_y0;
+    if (dst->beam_row < 0)
+        dst->beam_row = 0;
+    if (dst->beam_row > h)
+        dst->beam_row = h;
+    dst->line_counter = v->line_counter;
+    dst->status = v->status;
+    dst->int_line = v->n_int_state == 0;
+    dst->vint_pending = ((v->status | v->pending_status) & 0x80) != 0;
+    dst->hint_pending = v->pending_hint || v->hint_occurred;
+    dst->cycles = m->cycles;
+    dst->frame = v->frame_count;
+}
+
+/* Machine thread, right after a frame ran. */
+static void capture_frame(const sms_machine_t *m)
+{
+    pthread_mutex_lock(&s_cap_lock);
+    if (s_cap)
+    {
+        sms_host_capture_fill(m, s_cap);
+        s_cap->beam_row = s_cap->fb_height;     /* a finished frame: every row */
+        s_cap->serial++;
+    }
+    pthread_mutex_unlock(&s_cap_lock);
+}
+
+int sms_host_capture_get(struct smsvid_capture *dst, uint64_t *serial_inout)
+{
+    int changed = 0;
+
+    pthread_mutex_lock(&s_cap_lock);
+    if (s_cap && s_cap->serial != 0 && s_cap->serial != *serial_inout)
+    {
+        memcpy(dst, s_cap, sizeof *dst);
+        *serial_inout = s_cap->serial;
+        changed = 1;
+    }
+    pthread_mutex_unlock(&s_cap_lock);
     return changed;
 }
 
@@ -589,6 +675,8 @@ static void *machine_thread(void *arg)
 
         sms_machine_run_frame(&s_machine);
         sms_cart_frame(s_cart);
+        if (atomic_load(&s_cap_users) > 0)
+            capture_frame(&s_machine);
         frame_publish(s_machine.vdp.fb, s_machine.vdp.fb_height);
         audio_publish(s_machine.mix.out, s_machine.mix.out_frames);
         s_machine.mix.out_frames = 0;

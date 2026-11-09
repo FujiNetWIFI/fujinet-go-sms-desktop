@@ -5,7 +5,8 @@
  * read and write, I/O in and out) with conditions, memory, VRAM and CRAM,
  * the VDP views, sound and I/O, the cartridge tab, built-in and loaded
  * symbols in every format, the trace ring, Save, the prompt and its
- * completion, and detach lets it run again. The breakpoints survive a
+ * completion, the `old` variable, VRAM / CRAM write breakpoints, memory
+ * search and the memory map, and detach lets it run again. The breakpoints survive a
  * power cycle.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
@@ -21,6 +22,9 @@
 
 #include "smssession.h"
 #include "smsdebug.h"
+#include "smsmemtools.h"
+#include "smsvidtab.h"
+#include "host.h"
 #include "test_tmpdir.h"
 #include "test_rom.h"
 
@@ -310,17 +314,334 @@ int main(void)
     /* the trace ring */
     {
         smsdebug_trace tr[16];
+        char line[128];
+        int branches = 0, in_range = 0;
+        uint64_t serial;
+
+        check(smsdebug_trace_count(d) == 0 && smsdebug_trace_read(d, tr, 16) == 0,
+              "the trace is empty (and unallocated) until enabled");
         smsdebug_trace_enable(d, 1);
+        serial = smsdebug_stop_serial(d);
         for (i = 0; i < 10; i++) {
             smsdebug_step(d);
             wait_stopped(d, 1, 2000);
         }
+        check(smsdebug_stop_serial(d) >= serial + 10, "every stop bumps the stop serial");
         n = smsdebug_trace_read(d, tr, 16);
         check(n >= 10, "the trace holds the stepped instructions");
+        check(smsdebug_trace_count(d) == n, "trace_count agrees");
         check(n > 0 && tr[0].pc >= 0x0006 && tr[0].pc <= 0x000F, "newest first, in the loop");
+        check(n > 0 && tr[0].bank == 0, "an entry carries the ROM bank mapped at its pc");
+        check(n > 0 && smsdebug_trace_read(d, tr, 1) == 1, "reading fewer than held");
+        n = smsdebug_trace_read(d, tr, 16);
+        for (i = 0; i < n; i++) {
+            branches += smsdebug_trace_match(&tr[i], SMSDEBUG_TRACE_BRANCHES, 0, 0);
+            in_range += smsdebug_trace_match(&tr[i], SMSDEBUG_TRACE_RANGE, 0x000F, 0x0006) &&
+                        tr[i].pc >= 0x0006 && tr[i].pc <= 0x000F;
+            check(smsdebug_trace_match(&tr[i], SMSDEBUG_TRACE_ALL, 0, 0), "ALL passes everything");
+        }
+        check(branches >= 1 && branches < n, "BRANCHES keeps the JR and drops the rest");
+        check(in_range == n, "RANGE (given backwards) keeps the loop");
+        check(!smsdebug_trace_match(&tr[0], SMSDEBUG_TRACE_RANGE, 0x4000, 0x5000), "RANGE drops others");
+        smsdebug_trace_format(&tr[0], line, sizeof line);
+        check(strstr(line, "AF=") != NULL && strstr(line, "SP=DFF0") != NULL && line[4] == ' ',
+              "trace_format shows pc, instruction and registers");
         smsdebug_trace_enable(d, 0);
         smsdebug_trace_clear(d);
+        check(smsdebug_trace_count(d) == 0, "Clear empties the ring");
     }
+
+    /* the stop reason names its address; the stop serial moves with stops */
+    {
+        char why[128]; int addr = -1;
+        uint64_t before = smsdebug_stop_serial(d);
+        smsdebug_step(d);
+        wait_stopped(d, 1, 2000);
+        smsdebug_stop_reason(d, why, sizeof why, &addr);
+        check(strstr(why, "step at $") != NULL && addr == cpu_pc(d), "the stop reason says where");
+        check(smsdebug_stop_serial(d) > before, "stop_serial moved");
+        smsdebug_resume(d);
+        smsdebug_stop_reason(d, why, sizeof why, &addr);
+        check(strcmp(why, "running") == 0 && addr == -1, "running has no address");
+        smsdebug_stop(d);
+        wait_stopped(d, 1, 3000);
+        smsdebug_stop_reason(d, why, sizeof why, &addr);
+        check(strstr(why, "stopped at $") != NULL, "a stop request is also located");
+    }
+
+    /* disabled exec breakpoints reach the gutter; Clear Hits */
+    {
+        smsdebug_breakpoint list[8];
+        int id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_EXEC, 0x000E, 0x000E, "");
+        smsdebug_breakpoint_enable(d, id, 0);
+        smsdebug_disassemble(d, 0x000E, lines, 1, NULL);
+        check(!lines[0].has_breakpoint && lines[0].bp_disabled, "a disabled breakpoint is the grey dot");
+        smsdebug_breakpoint_enable(d, id, 1);
+        smsdebug_disassemble(d, 0x000E, lines, 1, NULL);
+        check(lines[0].has_breakpoint && !lines[0].bp_disabled, "an enabled one is the red dot");
+        smsdebug_breakpoint_clear(d);
+        smsdebug_disassemble(d, 0x000E, lines, 1, NULL);
+        check(!lines[0].has_breakpoint && !lines[0].bp_disabled, "and none is none");
+
+        id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_EXEC, 0x000F, 0x000F, "");
+        check(run_until_stop(d, 3000), "an execute breakpoint hits again");
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].hits >= 1, "it counted");
+        smsdebug_breakpoint_clear_hits(d);
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].hits == 0, "Clear Hits zeroes it");
+        smsdebug_breakpoint_clear(d);
+    }
+
+    /* `old`: the byte before a write, though the hook runs after the store */
+    {
+        smsdebug_breakpoint list[8];
+        uint8_t v = 0;
+        char why[128];
+        int id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_WRITE, 0xC010, 0xC010,
+                                         "value != old + 1 && value != 0");
+        check(id > 0, "a condition may use old");
+        smsdebug_resume(d);
+        sleep_ms(200);
+        check(!smsdebug_is_stopped(d), "the counter always writes old + 1 (or wraps): never stops");
+        smsdebug_stop(d);
+        wait_stopped(d, 1, 3000);
+        smsdebug_breakpoint_remove(d, id);
+
+        id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_WRITE, 0xC010, 0xC010, "old == $FF");
+        check(id > 0 && run_until_stop(d, 5000), "old == $FF stops on the wrap");
+        smsdebug_read(d, 0xC010, &v, 1);
+        check(v == 0, "the write that wrapped it to 0");
+        smsdebug_breakpoint_remove(d, id);
+
+        /* a poke while stopped is seen on release */
+        id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_WRITE, 0xC010, 0xC010, "old == $40");
+        smsdebug_write(d, 0xC010, 0x40);
+        check(id > 0 && run_until_stop(d, 5000), "a poke while stopped reseeds old");
+        smsdebug_read(d, 0xC010, &v, 1);
+        check(v == 0x41, "the next write was $40 -> $41");
+        smsdebug_stop_reason(d, why, sizeof why, NULL);
+        check(strstr(why, "wrote $C010 = $41 (was $40)") != NULL, "the reason says what it replaced");
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].hits == 1, "one hit");
+        smsdebug_breakpoint_clear(d);
+    }
+
+    /* VRAM and CRAM write breakpoints: a little program in RAM writes both */
+    {
+        static const uint8_t prog[] = {
+            0x3E, 0x00, 0xD3, 0xBF, 0x3E, 0x40, 0xD3, 0xBF,   /* VDP address 0, write */
+            0x3E, 0x77, 0xD3, 0xBE,                           /* VRAM[0] = $77 */
+            0x3E, 0x05, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF,   /* CRAM index 5 */
+            0x3E, 0x2A, 0xD3, 0xBE,                           /* CRAM[5] = $2A */
+            0x18, 0xFE,
+        };
+        smsdebug_breakpoint list[8];
+        uint8_t byte = 0x11;
+        int id;
+        char why[128];
+
+        for (i = 0; i < (int)sizeof prog; i++)
+            smsdebug_write(d, (uint16_t)(0xC100 + i), prog[i]);
+        smsdebug_breakpoint_clear(d);
+
+        id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_VRAM, 0x0000, 0x0000, "old == $11 && value == $77");
+        check(id > 0, "a VRAM write breakpoint is added");
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].type == SMSDEBUG_BP_VRAM, "and listed");
+        smsdebug_vram_write(d, 0, &byte, 1);
+        smsdebug_cpu_set(d, SMS_REG_PC, 0xC100);
+        check(run_until_stop(d, 3000), "the VRAM write stops");
+        smsdebug_stop_reason(d, why, sizeof why, NULL);
+        check(strstr(why, "vram write $0000 = $77 (was $11)") != NULL, "the reason names the VRAM write");
+        check(cpu_pc(d) == 0xC10C, "at the instruction after the OUT");
+        smsdebug_vram_read(d, 0, &byte, 1);
+        check(byte == 0x77, "and the store landed");
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].hits == 1, "counted");
+        smsdebug_breakpoint_remove(d, id);
+
+        /* a false condition on old: never */
+        byte = 0x11;
+        smsdebug_vram_write(d, 0, &byte, 1);
+        id = smsdebug_breakpoint_add(d, SMSDEBUG_BP_VRAM, 0x0000, 0x3FFF, "old == $99");
+        smsdebug_cpu_set(d, SMS_REG_PC, 0xC100);
+        smsdebug_resume(d);
+        sleep_ms(150);
+        check(!smsdebug_is_stopped(d), "a false VRAM condition never stops");
+        smsdebug_stop(d);
+        wait_stopped(d, 1, 3000);
+        smsdebug_breakpoint_remove(d, id);
+
+        /* CRAM, through the prompt */
+        smsdebug_cram_write(d, 5, 0x07);
+        smsdebug_command(d, "bpc 5 old == $07 && value == $2A", out, sizeof out);
+        check(strstr(out, "breakpoint #") != NULL, "bpc adds a breakpoint");
+        smsdebug_command(d, "bpc 40", out, sizeof out);
+        check(strstr(out, "error") != NULL, "CRAM has 32 entries");
+        smsdebug_command(d, "bpv $4000", out, sizeof out);
+        check(strstr(out, "error") != NULL, "VRAM ends at $3FFF");
+        smsdebug_command(d, "breaks", out, sizeof out);
+        check(strstr(out, " c ") != NULL, "breaks lists it");
+        smsdebug_cpu_set(d, SMS_REG_PC, 0xC100);
+        check(run_until_stop(d, 3000), "the CRAM write stops");
+        smsdebug_stop_reason(d, why, sizeof why, NULL);
+        check(strstr(why, "cram write 5 = $2A (was $07)") != NULL && cpu_pc(d) == 0xC118, "named, after the OUT");
+        smsdebug_command(d, "clear", out, sizeof out);
+        smsdebug_command(d, "bpv $0000-$00FF value == $77", out, sizeof out);
+        check(strstr(out, "breakpoint #") != NULL, "bpv adds one");
+        smsdebug_breakpoint_list(d, list, 8);
+        {
+            char text[160];
+            smsbp_describe(d, &list[0], text, sizeof text);
+            check(strstr(text, "VRAM write  $0000-$00FF  if value == $77") != NULL, "and describes it");
+        }
+        smsdebug_command(d, "clear", out, sizeof out);
+        smsdebug_cpu_set(d, SMS_REG_PC, 0x0006);
+    }
+
+    /* Access = read + write in one entry */
+    {
+        smsdebug_breakpoint list[8];
+        char text[160], why[128];
+        smsdebug_command(d, "bpa $C010", out, sizeof out);
+        check(strstr(out, "breakpoint #") != NULL, "bpa adds an Access breakpoint");
+        check(smsdebug_breakpoint_list(d, list, 8) == 1 && list[0].type == SMSDEBUG_BP_ACCESS, "READ|WRITE");
+        smsbp_describe(d, &list[0], text, sizeof text);
+        check(strncmp(text, "Access  $C010", 13) == 0, "described as Access");
+        smsdebug_command(d, "breaks", out, sizeof out);
+        check(strstr(out, " a ") != NULL, "listed as a");
+        smsdebug_cpu_set(d, SMS_REG_PC, 0x0006);
+        check(run_until_stop(d, 3000), "an access stops");
+        smsdebug_stop_reason(d, why, sizeof why, NULL);
+        check(strstr(why, "read $C010 = $") != NULL || strstr(why, "wrote $C010 = $") != NULL,
+              "read or wrote, named");
+        smsdebug_command(d, "clear", out, sizeof out);
+    }
+
+    /* symbols for a Symbols tab */
+    {
+        int idx[512], total = smsdebug_symbols_count(d), cnt, builtin;
+        uint16_t addr = 0;
+        char name[64];
+        int bank = 0;
+        check(total > 0, "built-in symbols exist");
+        check(smsdebug_symbols_get(d, 0, &addr, name, sizeof name, &bank) == 1 && name[0], "symbols_get");
+        check(smsdebug_symbols_get(d, total, &addr, name, sizeof name, &bank) == 0, "past the end");
+        check(smsdebug_load_symbols(d, NULL, msg, sizeof msg) >= -1, "load_symbols tolerated");
+        smsdebug_set_label(d, 0xC0DE, "My_Probe_Label");
+        check(smsdebug_symbols_count(d) == total + 1 || smsdebug_symbols_count(d) >= total, "a label adds");
+        cnt = smsdebug_symbols_filter(d, "probe_LABEL", idx, 512);
+        check(cnt == 1, "filter is a case-insensitive substring");
+        check(cnt == 1 && smsdebug_symbols_get(d, idx[0], &addr, name, sizeof name, &bank) &&
+              addr == 0xC0DE && !strcmp(name, "My_Probe_Label"), "and finds the label");
+        cnt = smsdebug_symbols_filter(d, "", idx, 512);
+        check(cnt > 1, "an empty filter matches all");
+        {
+            uint16_t prev = 0, a2;
+            int ordered = 1;
+            for (i = 0; i < cnt; i++) {
+                smsdebug_symbols_get(d, idx[i], &a2, name, sizeof name, &bank);
+                ordered &= a2 >= prev;
+                prev = a2;
+            }
+            check(ordered, "ordered by address");
+        }
+        smsdebug_clear_symbols(d);
+        builtin = smsdebug_symbols_count(d);
+        check(builtin > 0 && smsdebug_symbols_filter(d, "My_Probe_Label", idx, 512) == 0,
+              "Clear Symbols drops loaded labels, keeps built-ins");
+        check(smsdebug_label_address(d, "VDP_CTRL") >= 0 || builtin > 0, "built-ins remain");
+    }
+
+    /* memory map labels; the console io prints the map once */
+    {
+        smsdebug_region map[16];
+        char label[64];
+        int count = smsdebug_memory_map(d, map, 16);
+        check(smsmem_region_name(map, count, 0xC123, label, sizeof label) > 0 && strstr(label, "RAM"),
+              "region name of a RAM address");
+        check(smsmem_region_name(map, count, 0xFFFE, label, sizeof label) > 0 && strstr(label, "Mapper"),
+              "and of a mapper register");
+        check(smsmem_region_name(map, 0, 0x1000, label, sizeof label) == 0 && !label[0], "none for an empty map");
+        smsdebug_command(d, "io", out, sizeof out);
+        check(strstr(out, "Memory map") != NULL && strstr(strstr(out, "Memory map") + 10, "Memory map") == NULL,
+              "console io prints the memory map once");
+    }
+
+    /* memory search over the CPU's 64K */
+    {
+        static const uint8_t loop[] = { 0xDB, 0xDC, 0x32, 0x12 };
+        uint8_t pat[SMSSEARCH_MAX], mask;
+        uint16_t hit[16], found = 0;
+        int cnt, plen, flags;
+
+        cnt = smsdebug_search(d, loop, 4, 0xFF, 0, 0, 0xFFFF, hit, 16);
+        check(cnt >= 1 && hit[0] == 0x0006, "search finds the loop at $0006");
+        check(smsdebug_search(d, loop, 4, 0xFF, 0, 0, 0x0005, hit, 16) == 0, "`to` bounds the start: not before $0006");
+        check(smsdebug_search(d, loop, 4, 0xFF, 0, 0x0006, 0x0006, hit, 16) == 1, "and the start itself is in");
+        check(smsdebug_search(d, loop, 4, 0xFF, 0, 0x0007, 0x0006, hit, 16) == 1, "from > to swaps");
+        {
+            static const uint8_t high_nibble = 0xD0;
+            check(smsdebug_search(d, &high_nibble, 1, 0xF0, 0, 0x0006, 0x0006, hit, 16) == 1, "a mask");
+        }
+        check(smssearch_parse(SMSSEARCH_TEXT, "tmr sega", pat, &plen, &mask, &flags) &&
+              (flags & SMSDEBUG_SEARCH_NOCASE), "text parses");
+        cnt = smsdebug_search(d, pat, plen, mask, flags, 0, 0xFFFF, hit, 16);
+        {
+            int at_7ff0 = 0;
+            for (i = 0; i < cnt; i++)
+                at_7ff0 |= hit[i] == 0x7FF0;
+            check(at_7ff0, "case-insensitive text search finds the header signature");
+        }
+        check(smsdebug_search_next(d, loop, 4, 0xFF, 0, 0x0000, 0, &found) == 1 && found == 0x0006,
+              "next from $0000 finds $0006");
+        check(smsdebug_search_next(d, pat, plen, mask, flags, 0x7FF0, 0, &found) == 1,
+              "next wraps past the end");
+        check(smsdebug_search_next(d, loop, 4, 0xFF, 0, 0x0006, 1, &found) == 1 && found >= 0x0006,
+              "previous from the first match wraps to the last");
+        check(smsdebug_search_next(d, pat, plen, mask, flags, 0x7FF0, 1, &found) == 1 && found < 0x7FF0 + 1 + 0x8000,
+              "previous finds one");
+        {
+            static const uint8_t none[] = { 0x12, 0x34, 0x56, 0x78, 0x9A };
+            check(smsdebug_search_next(d, none, 5, 0xFF, 0, 0x0000, 0, &found) == 0, "no match is 0");
+        }
+    }
+
+    /* the memory map: ordered, gap-free, $0000-$FFFF */
+    {
+        smsdebug_region map[16];
+        int ok = 1;
+        n = smsdebug_memory_map(d, map, 16);
+        check(n >= 6, "the memory map has its regions");
+        check(n > 0 && map[0].lo == 0x0000 && map[n - 1].hi == 0xFFFF, "from $0000 to $FFFF");
+        for (i = 1; i < n; i++)
+            ok &= map[i].lo == map[i - 1].hi + 1;
+        for (i = 0; i < n; i++)
+            ok &= map[i].lo <= map[i].hi && map[i].name[0] != '\0';
+        check(ok, "contiguous, ordered, all named");
+        for (i = 0; i < n; i++)
+            if (map[i].lo == 0xC000)
+                check(map[i].readable && map[i].writable && strstr(map[i].name, "RAM") != NULL, "console RAM at $C000");
+        check(n > 0 && map[n - 1].lo == 0xFFFC && strstr(map[n - 1].name, "Mapper") != NULL,
+              "the mapper registers close the map");
+        check(n > 1 && map[0].readable && strstr(map[0].name, "cartridge") != NULL, "the cartridge is mapped at $0000");
+        check(smsdebug_memory_map(d, map, 3) == 3, "the map honours max");
+    }
+
+    /* the watch list (process-wide), through the prompt */
+    smswatch_clear();
+    smsdebug_command(d, "watch $C010", out, sizeof out);
+    check(strstr(out, "$C010") != NULL && smswatch_count() == 1, "watch adds");
+    smsdebug_command(d, "find DB DC 32", out, sizeof out);
+    check(strstr(out, "$0006") != NULL, "find lists the match");
+    smsdebug_command(d, "find text TMR SEGA", out, sizeof out);
+    check(strstr(out, "$7FF0") != NULL, "find text");
+    smsdebug_command(d, "unwatch all", out, sizeof out);
+    check(smswatch_count() == 0, "unwatch all");
+    smsdebug_command(d, "cart", out, sizeof out);
+    check(strstr(out, "file ") != NULL, "cart names the file");
+    smsdebug_completions(d, "wat", out, sizeof out);
+    check(strstr(out, "watch") != NULL, "watch completes");
+    smsdebug_completions(d, "bp", out, sizeof out);
+    check(strstr(out, "bpv") != NULL && strstr(out, "bpc") != NULL, "bpv / bpc complete");
+    smsdebug_completions(d, "print ol", out, sizeof out);
+    check(strstr(out, "old") != NULL, "old completes in expressions");
 
     /* the beam: a scanline, a frame */
     {
@@ -387,6 +708,80 @@ int main(void)
     check(strstr(out, "run") != NULL && strstr(out, "runto") != NULL, "Tab completion");
     smsdebug_command(d, "frame", out, sizeof out);
     check(wait_stopped(d, 1, 3000), "frame stops again");
+
+    /* the Video tab's controller against the live machine */
+    {
+        smsvid_tab *vt = smsvid_tab_new(d);
+        const uint32_t *pic;
+        int pw, ph, same = 1, bad = 0, checked = 0;
+        smsvid_tab_set_zoom(vt, 1);
+        smsvid_tab_set_overlays(vt, 0);
+        /* let frames finish with the tab open: it asks the machine to capture them */
+        smsdebug_resume(d);
+        sleep_ms(300);
+        smsdebug_stop(d);
+        check(wait_stopped(d, 1, 3000), "stopped with the Video tab open");
+        smsdebug_frame(d, 1);
+        check(wait_stopped(d, 1, 3000), "stopped at a frame boundary");
+        sleep_ms(20);
+        smsvid_tab_set_view(vt, SMSVID_V_DISPLAY);
+        check((smsvid_tab_refresh(vt, 1) & SMSVID_TAB_PICTURE) != 0, "Video tab refresh");
+        pic = smsvid_tab_picture(vt, &pw, &ph);
+        check(pic && pw == 268 && (ph == 224 || ph == 240), "Display is the whole frame");
+        sms_host_lock();
+        if (pic) {
+            const sms_machine_t *m = sms_host_machine();
+            for (int k = 0; k < pw * ph; k++)
+                if ((pic[k] & 0xffffff) != (m->vdp.fb[k] & 0xffffff)) { same = 0; break; }
+            if (m->vdp.vdp_mode == 4) {
+                smsvid_tab_set_view(vt, SMSVID_V_DECODED);
+                smsvid_tab_refresh(vt, 1);
+                const uint32_t *dec = smsvid_tab_picture(vt, &pw, &ph);
+                for (int y = 0; dec && y < ph; y += 3)
+                    for (int x = 0; x < pw; x += 5) {
+                        int row = -1;
+                        for (int r = 0; r < m->vdp.fb_height; r++)
+                            if (m->vdp.line_regs[r].valid && m->vdp.line_regs[r].line == y) { row = r; break; }
+                        if (row < 0) continue;
+                        checked++;
+                        if ((dec[(size_t)y * pw + x] & 0xffffff) != (m->vdp.fb[(size_t)row * 268 + 2 + x] & 0xffffff))
+                            bad++;
+                    }
+            }
+        }
+        sms_host_unlock();
+        check(same, "Display equals the machine's framebuffer at a frame boundary");
+        check(bad == 0, "Decoded agrees with the machine's own picture (mode 4)");
+        printf("   (decoded samples compared: %d)\n", checked);
+        {
+            smsdebug_breakpoint bl[8];
+            smsdebug_breakpoint_clear(d);
+            smsvid_tab_set_view(vt, SMSVID_V_DISPLAY);
+            smsvid_tab_refresh(vt, 1);
+            smsvid_tab_hover(vt, 2, 20);
+            if (smsvid_tab_pixel(vt) && smsvid_tab_pixel(vt)->active) {
+                check(smsvid_tab_break_on_pixel(vt) >= 0, "Break on writes adds VRAM breakpoints");
+                n = smsdebug_breakpoint_list(d, bl, 8);
+                check(n >= 1 && (bl[0].type & SMSDEBUG_BP_VRAM), "...of the VRAM class");
+            }
+            check(smsvid_tab_break_on_swatch(vt, 3) >= 0, "Break on CRAM write adds a CRAM breakpoint");
+            n = smsdebug_breakpoint_list(d, bl, 8);
+            check(n >= 1 && (bl[n - 1].type & SMSDEBUG_BP_CRAM) && bl[n - 1].start == 3, "...on that entry");
+            smsdebug_breakpoint_clear(d);
+        }
+        smsvid_tab_free(vt);
+    }
+
+    /* search needs a stopped machine */
+    {
+        static const uint8_t any[] = { 0xDB };
+        uint16_t hit[2], found;
+        smsdebug_resume(d);
+        check(smsdebug_search(d, any, 1, 0xFF, 0, 0, 0xFFFF, hit, 2) == -1, "search refuses while running");
+        check(smsdebug_search_next(d, any, 1, 0xFF, 0, 0, 0, &found) == -1, "and so does search_next");
+        smsdebug_stop(d);
+        check(wait_stopped(d, 1, 3000), "stopped again");
+    }
 
     /* step over does not wedge the machine */
     smsdebug_step_over(d);

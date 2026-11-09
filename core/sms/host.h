@@ -89,6 +89,19 @@ double sms_host_frame_rate(void);
 
 void sms_host_notify_vsync(int64_t frame_time_ns);
 
+/* ---- the debugger's Video tab: a once-a-frame capture ----
+ * While at least one reader has it enabled, the machine thread copies VRAM,
+ * CRAM, the registers, each row's own registers and the picture (see
+ * smsvidcap.h) after every finished frame. Nothing is copied otherwise.
+ * capture_get copies the newest capture into dst when its serial differs
+ * from *serial_inout and returns 1. capture_fill is for a reader that holds
+ * the machine (sms_host_lock, or a parked machine): it fills dst from the
+ * live machine, the frame as far as the beam has drawn it (beam_row). */
+struct smsvid_capture;
+void sms_host_capture_enable(int on);
+int  sms_host_capture_get(struct smsvid_capture *dst, uint64_t *serial_inout);
+void sms_host_capture_fill(const sms_machine_t *m, struct smsvid_capture *dst);
+
 /* ---- audio: 48 kHz interleaved stereo float, self-correcting backlog ----
  * Returns frames written (no padding). */
 int sms_host_audio_copy(float *dst, int max_frames);

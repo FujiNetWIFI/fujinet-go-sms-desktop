@@ -16,6 +16,8 @@
 #include <time.h>
 
 #include "debugger_internal.h"
+#include "smsmemtools.h"
+#include "smsvidtab.h"
 
 typedef struct {
     char *dst;
@@ -37,10 +39,10 @@ static void out(outbuf *o, const char *fmt, ...)
 
 static const char *const commands[] = {
     "help", "step", "over", "out", "run", "stop", "runto", "scanline", "frame",
-    "break", "bpr", "bpw", "bpin", "bpout", "delete", "enable", "disable", "clear",
+    "break", "bpr", "bpw", "bpin", "bpout", "bpa", "bpv", "bpc", "delete", "enable", "disable", "clear",
     "breaks", "print", "regs", "set", "mem", "poke", "vram", "vpoke", "cram", "vdp",
     "sprites", "psg", "fm", "io", "cart", "mailbox", "label", "labels", "disasm",
-    "trace", "save", NULL,
+    "trace", "save", "watch", "unwatch", "find", "video", NULL,
 };
 
 static const char *help_text =
@@ -53,6 +55,9 @@ static const char *help_text =
     "break <addr>[-<end>] [cond]     execute breakpoint\n"
     "bpr | bpw <addr>[-<end>] [cond] read / write breakpoint\n"
     "bpin | bpout <port>[-<end>] [cond]  I/O breakpoint\n"
+    "bpa <addr>[-<end>] [cond]       read-or-write (Access) breakpoint\n"
+    "bpv <vram addr>[-<end>] [cond]  VRAM write breakpoint (value, addr, old)\n"
+    "bpc <cram index>[-<end>] [cond]  CRAM write breakpoint\n"
     "delete <id> | enable <id> | disable <id> | clear | breaks\n"
     "print <expr>           e.g. print hl, print [$c000], print {sp}\n"
     "regs                   CPU registers\n"
@@ -63,11 +68,14 @@ static const char *help_text =
     "vdp | sprites | psg | fm | io | cart | mailbox\n"
     "label <addr> <name> | labels [file]\n"
     "disasm [addr] [n]\n"
-    "trace [on|off|n]       record / show the last n instructions\n"
+    "trace [on|off|clear|n] record / show the last n instructions\n"
+    "watch [addr|label|lo-hi] | unwatch <n|all>   the watch list\n"
+    "find [hex] <bytes> | find text <string>   search memory (stopped)\n"
+    "video [section]       the Video tab as text: pixel registers colours lines timing\n"
     "save <dis|ram|vram|cram|sram|arena|regs> <file>\n"
     "Expressions: $C000 0xC000 C000h 49152 %1010; registers a..l af..iy sp pc\n"
     "i r af' ...; flags cf zf sf hf pf nf; [addr] {addr}; labels; vpos hpos\n"
-    "vcount hcount frame cycles; in a condition, value and addr; C operators.\n";
+    "vcount hcount frame cycles; in a condition, value, old and addr; C operators.\n";
 
 static char *next_tok(char **p)
 {
@@ -183,11 +191,25 @@ static void list_breaks(smsdebug *d, outbuf *o)
     {
         char kinds[16] = "";
         if (bp[i].type & SMSDEBUG_BP_EXEC)  strcat(kinds, "x");
-        if (bp[i].type & SMSDEBUG_BP_READ)  strcat(kinds, "r");
-        if (bp[i].type & SMSDEBUG_BP_WRITE) strcat(kinds, "w");
+        if ((bp[i].type & SMSDEBUG_BP_ACCESS) == SMSDEBUG_BP_ACCESS)
+            strcat(kinds, "a");
+        else
+        {
+            if (bp[i].type & SMSDEBUG_BP_READ)  strcat(kinds, "r");
+            if (bp[i].type & SMSDEBUG_BP_WRITE) strcat(kinds, "w");
+        }
         if (bp[i].type & SMSDEBUG_BP_IN)    strcat(kinds, "i");
         if (bp[i].type & SMSDEBUG_BP_OUT)   strcat(kinds, "o");
-        if (bp[i].start == bp[i].end)
+        if (bp[i].type & SMSDEBUG_BP_VRAM)  strcat(kinds, "v");
+        if (bp[i].type & SMSDEBUG_BP_CRAM)  strcat(kinds, "c");
+        if (bp[i].type == SMSDEBUG_BP_CRAM)
+        {
+            if (bp[i].start == bp[i].end)
+                out(o, "#%d %-3s %u", bp[i].id, kinds, bp[i].start);
+            else
+                out(o, "#%d %-3s %u-%u", bp[i].id, kinds, bp[i].start, bp[i].end);
+        }
+        else if (bp[i].start == bp[i].end)
             out(o, "#%d %-3s $%04X", bp[i].id, kinds, bp[i].start);
         else
             out(o, "#%d %-3s $%04X-$%04X", bp[i].id, kinds, bp[i].start, bp[i].end);
@@ -212,6 +234,16 @@ static void add_bp(smsdebug *d, outbuf *o, int type, char *args, int io)
     if (io && (a > 255 || b > 255))
     {
         out(o, "error: ports are 0-255\n");
+        return;
+    }
+    if (type == SMSDEBUG_BP_VRAM && (a < 0 || b < 0 || a > 0x3fff || b > 0x3fff))
+    {
+        out(o, "error: VRAM is $0000-$3FFF\n");
+        return;
+    }
+    if (type == SMSDEBUG_BP_CRAM && (a < 0 || b < 0 || a > 31 || b > 31))
+    {
+        out(o, "error: CRAM has 32 entries (0-31)\n");
         return;
     }
     id = smsdebug_breakpoint_add(d, type, (uint16_t)a, (uint16_t)b, rest_of(args));
@@ -302,6 +334,12 @@ int smsdebug_command(smsdebug *d, const char *command, char *dst, int dstsz)
         add_bp(d, &o, SMSDEBUG_BP_IN, p, 1);
     else if (!strcmp(cmd, "bpout"))
         add_bp(d, &o, SMSDEBUG_BP_OUT, p, 1);
+    else if (!strcmp(cmd, "bpa"))
+        add_bp(d, &o, SMSDEBUG_BP_ACCESS, p, 0);
+    else if (!strcmp(cmd, "bpv"))
+        add_bp(d, &o, SMSDEBUG_BP_VRAM, p, 0);
+    else if (!strcmp(cmd, "bpc"))
+        add_bp(d, &o, SMSDEBUG_BP_CRAM, p, 0);
     else if (!strcmp(cmd, "delete") || !strcmp(cmd, "enable") || !strcmp(cmd, "disable"))
     {
         char *t = next_tok(&p);
@@ -449,6 +487,16 @@ int smsdebug_command(smsdebug *d, const char *command, char *dst, int dstsz)
                 io.port_dc, io.port_dd, io.pad[0], io.pad[1], io.pause_held, io.reset_held,
                 io.mapper[0], io.mapper[1], io.mapper[2], io.mapper[3],
                 io.bios_present ? "" : "  (no BIOS)");
+            /* the console's copy of the region table; the window's Cart & I/O
+             * tab lays out smsdebug_memory_map itself, so it is printed once */
+            {
+                smsdebug_region map[16];
+                int count = smsdebug_memory_map(d, map, 16);
+                out(&o, "Memory map\n");
+                for (int i = 0; i < count; i++)
+                    out(&o, "  $%04X-$%04X  %s%s%s\n", map[i].lo, map[i].hi, map[i].name,
+                        map[i].readable ? "" : " (no read)", map[i].writable ? "" : " (read only)");
+            }
         }
     }
     else if (!strcmp(cmd, "cart") || !strcmp(cmd, "mailbox"))
@@ -460,6 +508,8 @@ int smsdebug_command(smsdebug *d, const char *command, char *dst, int dstsz)
         out(&o, "%s\n", info);
         if (!strcmp(cmd, "cart"))
         {
+            if (c.path[0])
+                out(&o, "file %s\n", c.path);
             if (c.mode)
                 out(&o, "banks %02X %02X %02X %02X %02X %02X  RAM %s%s  CRC %08X  claim %d\n",
                     c.bank[0], c.bank[1], c.bank[2], c.bank[3], c.bank[4], c.bank[5],
@@ -545,6 +595,93 @@ int smsdebug_command(smsdebug *d, const char *command, char *dst, int dstsz)
                     l.disasm, tr[i].af, tr[i].bc, tr[i].de, tr[i].hl, tr[i].sp);
             }
         }
+    }
+    else if (!strcmp(cmd, "watch"))
+    {
+        char *f = rest_of(p);
+        if (*f && smswatch_add(f) < 0)
+            out(&o, "no room for another watch\n");
+        if (!smswatch_count())
+            out(&o, "no watches (watch <addr|label|lo-hi>)\n");
+        else
+            for (int i = 0; i < smswatch_count(); i++)
+            {
+                char t[160];
+                smswatch_format(d, i, t, sizeof t);
+                out(&o, "%2d  %s\n", i, t);
+            }
+    }
+    else if (!strcmp(cmd, "unwatch"))
+    {
+        char *t = next_tok(&p);
+        if (t && !strcmp(t, "all"))
+            smswatch_clear();
+        else if (t && eval(d, &o, t, &v))
+            return o.len;
+        else if (t)
+            smswatch_remove((int)v);
+        else
+            out(&o, "unwatch <n|all>\n");
+    }
+    else if (!strcmp(cmd, "video"))
+    {
+        char *t = next_tok(&p);
+        int sec = SMSVID_S_PIXEL, i, found = 0;
+        smsvid_tab *vt;
+        char text[8192];
+        if (t)
+        {
+            for (i = 0; i < SMSVID_S_COUNT; i++)
+                if (!strncasecmp(t, smsvid_section_key(i), strlen(t)))
+                {
+                    sec = i;
+                    found = 1;
+                    break;
+                }
+            if (!found)
+                out(&o, "video [pixel|registers|colours|lines|timing]\n");
+        }
+        if (!t || found)
+        {
+            vt = smsvid_tab_new(d);
+            smsvid_tab_refresh(vt, 1);
+            smsvid_tab_text(vt, sec, text, sizeof text);
+            smsvid_tab_free(vt);
+            out(&o, "%s", text);
+        }
+    }
+    else if (!strcmp(cmd, "find"))
+    {
+        char *t = next_tok(&p);
+        int kind = SMSSEARCH_HEX, n = 0, flags = 0, cnt;
+        uint8_t pat[SMSSEARCH_MAX], mask;
+        uint16_t hit[32];
+        char fbuf[160];
+        if (t && !strcmp(t, "text"))
+        {
+            kind = SMSSEARCH_TEXT;
+            t = rest_of(p);
+        }
+        else if (t && !strcmp(t, "hex"))
+            t = rest_of(p);
+        else if (t)
+        {
+            snprintf(fbuf, sizeof fbuf, "%s %s", t, rest_of(p));
+            t = fbuf;
+        }
+        if (!t || !*t || !smssearch_parse(kind, t, pat, &n, &mask, &flags))
+        {
+            out(&o, "find [hex] <bytes> | find text <string>\n");
+            return o.len;
+        }
+        cnt = smsdebug_search(d, pat, n, mask, flags, 0, 0xffff, hit, 32);
+        if (cnt < 0)
+            out(&o, "stop the machine first\n");
+        else if (!cnt)
+            out(&o, "not found\n");
+        else
+            for (int i = 0; i < cnt; i++)
+                out(&o, "$%04X\n", hit[i]);
     }
     else if (!strcmp(cmd, "save"))
     {
