@@ -240,6 +240,17 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     _toastGeneration = smssession_gamepad_generation(_session);
     if (media) [self loadMedia:media];
 
+    /* F11 and F12 typed with the Controllers panel key act as in the main
+     * window. */
+    __weak SMSAppDelegate *weakSelf = self;
+    [SMSControllersWindow setAppKeyHandler:^BOOL(uint32_t keysym) {
+        SMSAppDelegate *strongSelf = weakSelf;
+        if (!strongSelf) return NO;
+        if (keysym == SMS_KEYSYM_F11) { [strongSelf->_window toggleFullScreen:nil]; return YES; }
+        if (keysym == SMS_KEYSYM_F12) { [SMSDebuggerWindow toggleForSession:strongSelf->_session]; return YES; }
+        return NO;
+    }];
+
     /* The family's launch hooks, for when the app misbehaves before a menu
      * is reachable. */
     if (getenv("SMS_OPEN_CONTROLLERS")) [SMSControllersWindow toggleWithSession:_session];
@@ -250,7 +261,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         block:^(NSTimer *t) { (void)t; [self updateTitle]; }];
     /* System actions the gamepad thread resolved (it cannot touch AppKit),
      * and gamepads coming and going. */
-    _sysactTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES
+    _sysactTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES
         block:^(NSTimer *t) {
             (void)t;
             int sa;
@@ -820,6 +831,20 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [self refreshPadList];
 }
 
+- (void)resetControls:(id)sender
+{
+    (void)sender;
+    smssession_bindings_reset(_session);
+    [SMSControllersWindow bindingsChanged];
+    [self showToast:@"Controls reset to defaults"];
+}
+
+- (void)openControllers:(id)sender
+{
+    (void)sender;
+    [SMSControllersWindow showWithSession:_session];
+}
+
 - (void)volumeChanged:(NSSlider *)sender
 {
     smssession_set_volume(_session, (int)sender.integerValue);
@@ -950,6 +975,22 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     _externalField.action = @selector(externalAddrChanged:);
     [_externalField.cell setSendsActionOnEndEditing:YES];
 
+    /* the Input group's note with its own Help button, and the controls */
+    NSStackView *inputHead = [NSStackView stackViewWithViews:@[
+        [self note:@"applied immediately; gamepads on/off restarts the session"],
+        SMSHelpButton(@"prefs/Input") ]];
+    inputHead.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    NSStackView *controlsRow = [NSStackView stackViewWithViews:@[
+        [NSButton buttonWithTitle:@"Reset Controls" target:self action:@selector(resetControls:)],
+        [NSButton buttonWithTitle:@"Open Controllers" target:self action:@selector(openControllers:)] ]];
+    controlsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    NSTextField *controlsNote = [NSTextField wrappingLabelWithString:
+        @"Keys and gamepad buttons are mapped in the Controllers window (F9): press Map, choose a "
+        @"control, then press the key or the gamepad button. Reset Controls puts the defaults back."];
+    controlsNote.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    controlsNote.textColor = NSColor.secondaryLabelColor;
+    controlsNote.preferredMaxLayoutWidth = 400;
+
     NSArray<NSArray<NSView *> *> *rows = @[
         @[ [self sectionLabel:@"Machine"], [self note:@"console, BIOS and FM apply with a power cycle when this window closes"] ],
         @[ [NSTextField labelWithString:@"Console"], _consolePopup ],
@@ -960,11 +1001,13 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
         @[ [self sectionLabel:@"Audio"], [self note:@"the volume applies immediately; audio on/off restarts the session"] ],
         @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"enable_audio" title:@"Audio" fallback:1] ],
         @[ [NSTextField labelWithString:@"Volume"], volume ],
-        @[ [self sectionLabel:@"Input"], [self note:@"applied immediately; gamepads on/off restarts the session"] ],
+        @[ [self sectionLabel:@"Input"], inputHead ],
+        @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"enable_gamepad" title:@"Enable gamepads" fallback:1] ],
         @[ [NSTextField labelWithString:@""],
-           [self checkBoxForKey:"analog_joystick" title:@"Analog sticks drive the D-pad" fallback:1] ],
-        @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"enable_gamepad" title:@"Gamepads" fallback:1] ],
+           [self checkBoxForKey:"analog_joystick" title:@"Left stick drives the D-pad" fallback:1] ],
         @[ [NSTextField labelWithString:@"Gamepads"], padRow ],
+        @[ [NSTextField labelWithString:@"Controls"], controlsRow ],
+        @[ [NSTextField labelWithString:@""], controlsNote ],
         @[ [self sectionLabel:@"FujiNet"], [self note:@"applied by restarting the session when this window closes"] ],
         @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"enable_fujinet" title:@"Enable FujiNet" fallback:1] ],
         @[ [NSTextField labelWithString:@""], [self checkBoxForKey:"fujinet_external" title:@"Use external FujiNet" fallback:0] ],
@@ -983,7 +1026,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
 
     _settingsWindow = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 640, 660)
+        initWithContentRect:NSMakeRect(0, 0, 640, 740)
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
                     backing:NSBackingStoreBuffered
                       defer:NO];
