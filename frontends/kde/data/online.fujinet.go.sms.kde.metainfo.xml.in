@@ -27,8 +27,9 @@
       sound, and the Mark III with the optional FM Sound Unit.
     </p>
     <p>
-      Both joypads are on screen and remappable, gamepads are picked up as
-      they are plugged in, and a native debugger is a key press away: a
+      Both Control Pads are drawn on screen like the real ones and
+      remappable, gamepads are picked up as they are plugged in and keep their
+      player between runs, and a native debugger is a key press away: a
       command prompt, the Z80 and RAM, a disassembly with breakpoints, the
       VDP with its name table, tiles, sprites and palette, the PSG, FM and
       I/O ports, and the FujiNet cartridge. Built-in, searchable Help covers

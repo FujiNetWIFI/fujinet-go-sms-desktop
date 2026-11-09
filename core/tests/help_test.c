@@ -26,7 +26,7 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
-    "main", "import-sd", "controllers", "fujilog", "prefs/Machine",
+    "main", "import-sd", "controllers", "fujilog", "prefs/Machine", "prefs/Input",
     "debugger/prompt", "debugger/cpu", "debugger/disassembly", "debugger/vdp",
     "debugger/io", "debugger/breakpoints", "debugger/cart", "debugger/fujinet",
 };
@@ -40,14 +40,23 @@ static const struct {
     const char *labels[10];
 } pages[] = {
     { "preferences", { "Console", "BIOS", "FM Sound Unit", "FM mutes the PSG", "Aspect", "Smooth scaling",
-                       "Enable audio", "Volume", "Enable gamepads", NULL } },
-    { "preferences", { "Left stick drives the D-pad", "Gamepads", "Automatic", "Enable FujiNet", "Use external FujiNet", "Address", NULL } },
+                       "Enable audio", "Volume", NULL } },
+    { "prefs/Input", { "Enable gamepads", "Left stick drives the D-pad", "Gamepads", "Automatic",
+                       "Player 1", "Player 2", "Reset Controls", "Open Controllers", NULL } },
+    { "preferences", { "Enable FujiNet", "Use external FujiNet", "Address", NULL } },
 };
 
 /* The settings keys the pages write. */
 static const char *const settings_keys[] = {
     "console", "fm_unit", "fm_unit_mutes_psg", "aspect", "smooth", "enable_audio", "volume", "enable_gamepad",
     "analog_joystick", "enable_fujinet", "fujinet_external", "fujinet_external_addr", "cart", "bindings",
+    "pad_assign", "controllers_show_bindings",
+};
+
+/* The default gamepad buttons and what they do (the Gamepads topic). */
+static const struct { const char *button, *does; } pad_rows[] = {
+    { "D-pad", "Up, down, left, right" }, { "South (A)", "Button 1" }, { "East (B)", "Button 2" },
+    { "Start", "Pause" }, { "Back", "Reset" },
 };
 
 /* The app's shortcuts, as a PC and as a Mac shows them. */
@@ -170,6 +179,10 @@ check_controls(smssession *s, int p)
 {
     char name[64];
 
+    CHECK(SMS_TARGET_COUNT == 17, "the Help says 17 controls");
+    require(p, "changing-the-controls", "count", "17 in all");
+    for (size_t row = 0; row < sizeof pad_rows / sizeof *pad_rows; row++)
+        require_row(p, "gamepads", pad_rows[row].button, pad_rows[row].does, NULL);
     for (int port = 0; port < 2; port++)
         for (int a = 0; a < SMS_ACT_PER_PORT; a++) {
             sms_binding b = smssession_binding_get(s, SMS_TARGET_PORT(port, a));

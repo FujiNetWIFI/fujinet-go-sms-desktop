@@ -28,8 +28,10 @@
       behaves as the hardware does.
     </p>
     <p>
-      Gamepads are picked up as they are plugged in and out, and every control
-      can be remapped to a key or a gamepad button. A native debugger has a
+      Gamepads are picked up as they are plugged in and out, each one drives
+      the player you choose and keeps it between runs, and every control can
+      be remapped to a key or a gamepad button on a Controllers window drawn
+      like the Master System's own Control Pads. A native debugger has a
       command prompt, the Z80 and console RAM, disassembly with breakpoints,
       the VDP with its name table, tile, sprite and palette views, the sound
       chips and I/O ports, and the FujiNet cartridge. Built-in, searchable

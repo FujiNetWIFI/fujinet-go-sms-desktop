@@ -71,9 +71,18 @@ desktop app. A member of the FujiNet Go desktop family
   out of the box.
 - **Gamepads that come and go.** SDL3 hot-plug: a pad plugged in while a game
   runs is assigned to the next free player within a second, unplugging
-  releases it, and a pad that comes back gets its player back. The
-  **Controllers** window shows both joypads live, presses buttons with the
-  mouse, and rebinds any control to a key or gamepad button (Map).
+  releases it, and a pad that comes back gets its player back. Which pad
+  drives which player can be fixed in Preferences or in the Controllers
+  window, and is remembered between runs. USB adapters with no standard
+  layout work too.
+- **A Controllers window drawn like the real thing.** `F9` shows the console's
+  strip (SEGA, **PAUSE**, and **RESET** or **RAPID** where the model has one)
+  over two Control Pads with their D-pads and buttons 1 and 2. They are
+  clickable and draggable, and whatever is held, by a key, a gamepad or the
+  mouse, lights up in the Master System red. **Map** rebinds any of the 17
+  controls to a key or gamepad button, **Clear** unbinds one, **Defaults**
+  and Preferences' **Reset Controls** put them back, and **Show bindings**
+  writes each control's key on it.
 
 The icon is the family mark in white on the Master System's red
 (`#E4002B`), over the square grid of its cartridge labels. The UI accent is
@@ -162,12 +171,17 @@ a slow network transaction never stalls the picture.
 |---|---|
 | Player 1 | arrows; **Z** = 1, **X** = 2 |
 | Player 2 | **I J K L**; **N** = 1, **M** = 2 |
-| Gamepads | D-pad / left stick; South = 1, East = 2, Start = Pause, Back = Reset |
+| Gamepads | D-pad (and the left stick, with "Left stick drives the D-pad" on); South = 1, East = 2, Start = Pause, Back = Reset |
 | Pause / Reset button | **Return** / **Backspace** |
 | Soft Reset / Reset to CONFIG | **F3** / **Escape** |
 | Controllers / Fullscreen / Debugger | F9 / F11 / F12 (debugger: F5 run/stop, F7 step, F8 step over, Shift+F8 step out) |
 
-Every control is remappable in the Controllers window.
+Opposite directions held together cancel. Every control (17 in all) is
+remappable in the Controllers window: **Map**, click a control on the picture,
+then press the key or gamepad button to give it. The pad each player uses is
+chosen in Preferences or in the Controllers window, and is remembered between
+runs (`pad_assign` in the settings file), as is **Show bindings**
+(`controllers_show_bindings`).
 
 ## How this was verified
 

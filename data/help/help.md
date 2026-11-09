@@ -138,6 +138,8 @@ Keys go by where they are on the keyboard, whatever your layout.
 | Reset to CONFIG | <kbd>Escape</kbd> |
 
 A key does one thing: giving a key to a new job takes it from the old one.
+Opposite directions held together cancel, so the D-pad never holds up and
+down, or left and right, at once.
 
 The app keeps these keys for itself:
 
@@ -174,33 +176,84 @@ Key combinations with the Super (Windows) key are the desktop's.
 Gamepads are picked up as they are plugged in, and can come and go at any
 time. A pad plugged in while a game runs is assigned to the next free player
 within a second, unplugging releases it, and a pad that comes back gets its
-player back. With **Left stick drives the D-pad** on, the left stick does too.
+player back. A toast says when one comes or goes. Preferences ▸ Input and the
+Controllers window can fix which pad is which player. A pad's player is
+remembered between runs: plug it back in, or start the app again, and it gets
+its player back.
+
+| Gamepad | Does |
+|---|---|
+| D-pad | Up, down, left, right |
+| South (A) | Button 1 |
+| East (B) | Button 2 |
+| Start | Pause |
+| Back | Reset |
+
+With **Left stick drives the D-pad** on, the left stick is the D-pad too: it
+engages at about a third of its travel and lets go at about a seventh. A
+gamepad with no standard layout (a plain USB adapter) uses its first hat, and
+its buttons, which can be given jobs in the same way. Every pad, the keys and
+the mouse hold separately, so letting go of one never lets go of another.
 
 ## Changing the controls
 
 The controls are changed in the Controllers window (<kbd>F9</kbd>): click
-**Map**, then click a control, then press the key or the gamepad button to give
-it. The control's old key or button is taken from it. **Defaults** puts every
-control back. The map is kept in the settings, and only what differs from the
-defaults is written.
+**Map**, then click a control on the picture (17 in all: each joypad's four
+directions and buttons 1 and 2, Pause, Reset, and the app's own Reset to
+CONFIG, Soft Reset and Stop in Debugger), then press the key or the gamepad
+button to give it. The control's old key or button is taken from it.
+
+<!-- only: macos -->
+
+A control can also be chosen from the list under the picture.
+
+<!-- end -->
+
+**Clear** takes the job off the key and the button of the control you picked,
+**Defaults** puts every control back (so does **Reset Controls** in
+Preferences ▸ Input), **Show bindings** writes each control's key on it, and
+<kbd>Escape</kbd> leaves Map one step at a time. <kbd>F9</kbd>, <kbd>F11</kbd>
+and <kbd>F12</kbd> are the app's and cannot be given to a control. The map is
+kept in the settings, and only what differs from the defaults is written.
 
 <!-- context: controllers -->
 # Controllers window
 
-The Controllers window (<kbd>F9</kbd>) shows both joypads live and presses
-their buttons with the mouse, with the console's buttons. It floats on its own
-at a fixed size. The controls that are held light up in the accent colour,
-whoever holds them: the keyboard, a gamepad or the mouse.
+The Controllers window (<kbd>F9</kbd>) draws the console as a player sees it:
+across the top the console's strip, with the SEGA wordmark and the model's
+name, **PAUSE** and, where the model has one, **RESET** (the Japanese console
+has **RAPID** in its place; the Master System II and the Mark III have only
+PAUSE), and below it the two Control Pads, Player 1 on the left and Player 2
+on the right. Each pad is black, with the D-pad (a dish with a cross) and the
+square buttons **1** and **2**. It floats on its own at a fixed size, hidden
+until you ask for it, and it keeps its size when the console changes. The
+controls that are held light up in the accent colour, whoever holds them: the
+keyboard, a gamepad or the mouse.
 
 | With the mouse | Does |
 |---|---|
-| Press a button | Holds it for as long as the button is down |
-| Press a console button | Presses it |
+| Press an arm of the D-pad | Holds that direction |
+| Drag from the D-pad's dish | Holds the direction dragged toward, a diagonal too |
+| Press button 1 or 2 | Holds it for as long as the button is down |
+| Press PAUSE or RESET | Holds it |
+| Drag off a control | Lets go of it |
+
+The three buttons under the picture (Reset to CONFIG, Soft Reset and Stop in
+Debugger) act when you release the mouse over them. Under them is a row for
+each gamepad plugged in: its name, the player it drives, and a choice of
+*Automatic*, *Player 1* or *Player 2*.
 
 The console samples its controls once a frame, so a button is *held*, not
-pulsed. Switching to another window lets go of everything the mouse holds. Keys
-typed in the Controllers window go to the console. **Map** and **Defaults**
-change the controls (see [Changing the controls](#changing-the-controls)).
+pulsed. Switching to another window lets go of everything the mouse holds.
+Keys typed in the Controllers window go to the console. Pointing at a control
+shows what drives it: its key and its gamepad button.
+
+**Map** picks a control to change: once one is picked, the others dim and the
+picked one is outlined. **Clear**, **Defaults** and **Show bindings** work
+with it (see [Changing the controls](#changing-the-controls)). With Show
+bindings on, or in Map, the arms and buttons show their keys, arrows as ←
+↑ → ↓, and long names cut short. Show bindings is remembered between runs
+(setting `controllers_show_bindings`).
 
 # Machines
 
@@ -364,6 +417,7 @@ On Windows this window is called **Settings** (in the Machine menu).
 - **Enable audio**: open the system audio device (setting `enable_audio`).
 - **Volume**: the output level, 0 to 100 (setting `volume`).
 
+<!-- context: prefs/Input -->
 ## Input settings
 
 - **Enable gamepads**: poll USB and Bluetooth gamepads (setting
@@ -372,8 +426,13 @@ On Windows this window is called **Settings** (in the Machine menu).
   (setting `analog_joystick`).
 - **Gamepads**: each one plugged in, and which player it drives. A new
   gamepad drives Player 1, the next Player 2; choose *Player 1* or *Player 2*
-  to fix it, or *Automatic*. The keys and buttons are changed in the
-  Controllers window (see [Changing the controls](#changing-the-controls)).
+  to fix it, or *Automatic*. The choice is remembered between runs (setting
+  `pad_assign`), by the gamepad's id and name; two identical gamepads cannot
+  be told apart, so the first to connect gets it.
+- **Reset Controls**: puts every key and gamepad button back to its default.
+- **Open Controllers**: shows the Controllers window, where the keys and
+  buttons are changed (see
+  [Changing the controls](#changing-the-controls)).
 
 ## FujiNet settings
 
@@ -388,8 +447,11 @@ On Windows this window is called **Settings** (in the Machine menu).
 
 The settings file is `settings.ini` (see [Files and folders](#files-and-folders)).
 Each setting above names its key. The others are `cart` (the opened cartridge,
-empty for CONFIG), `bios.<console id>` (the BIOS chosen for each console) and `bindings` (the
-controls that differ from the defaults).
+empty for CONFIG), `bios.<console id>` (the BIOS chosen for each console),
+`bindings` (the controls that differ from the defaults), `pad_assign` (the
+gamepads fixed to a player, remembered between runs; written by the app) and
+`controllers_show_bindings` (1 when the Controllers window shows each control's
+key).
 
 # Debugger
 
