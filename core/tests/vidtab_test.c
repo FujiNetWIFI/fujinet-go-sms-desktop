@@ -17,6 +17,13 @@
 #include "smsvidcap.h"
 #include "smsvidtab.h"
 
+/* MinGW has no setenv/unsetenv; _putenv_s does the same job there. */
+#ifdef _WIN32
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#endif
+
+
 static int fails;
 #define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s (line %d)\n", m, __LINE__); fails++; } \
                          else printf("ok: %s\n", m); } while (0)
