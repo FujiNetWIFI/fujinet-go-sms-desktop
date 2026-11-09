@@ -25,6 +25,7 @@ add_executable(fujinet-go-sms-macos MACOSX_BUNDLE
   help/HelpWindow.m
   controllers/ControllersWindow.m
   debugger/DebuggerWindow.m
+  debugger/VideoTab.m
   "${SMS_ICNS}"
 )
 set_source_files_properties("${SMS_ICNS}" PROPERTIES
