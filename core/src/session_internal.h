@@ -67,11 +67,14 @@ struct smssession {
      * exactly what its press asserted even if the binding changed meanwhile */
     uint32_t held_keysym[SMS_TARGET_COUNT];
 
-    /* what drives each joypad button and console button: the keyboard and
-     * the on-screen controls (bit 0) and each port's gamepad (bit 1),
-     * combined so letting go of one never releases the other */
-    uint8_t pad_src[2][SMS_ACT_PER_PORT];
-    uint8_t sw_src[SMS_SW_COUNT];
+    /* what drives each joypad contact and console button, one bit per source
+     * (SRC_*), so letting go of one source never releases another's.
+     * input_mtx covers these arrays and the calls that hand the result to
+     * the host (input.c); it is taken last (never while holding the gamepad
+     * or bindings lock). */
+    pthread_mutex_t input_mtx;
+    uint32_t pad_src[SMS_PLAYERS][SMS_ACT_PER_PORT];
+    uint32_t sw_src[SMS_SW_COUNT];
 
     void *audio;              /* audio_sdl.c state, NULL until started */
     void *gamepad;            /* gamepad_sdl.c state, NULL until started */
@@ -119,6 +122,23 @@ uint8_t *roms_load_bios(struct smssession *s, const char *name, uint32_t *size);
 /* The YM2413 patch ROM (0x90 bytes) if imported, else NULL. Caller frees. */
 uint8_t *roms_load_instruments(struct smssession *s);
 
+/* Who is holding an input down (the bits of the *_src arrays): the keyboard
+ * and the controllers window's console buttons together, the window's pointer
+ * (smssession_pointer_set), and for each gamepad (by the stable owner number
+ * its slot was given, 0 to SMS_MAX_PADS - 1) its buttons and its analog
+ * stick / hat separately. So letting go of one never releases another, even
+ * two pads or two buttons bound to the one key. */
+#define SMS_MAX_PADS 8
+#define SRC_KEYBOARD 1u
+#define SRC_PAD(owner)   (1u << (1 + (owner)))
+#define SRC_STICK(owner) (1u << (1 + SMS_MAX_PADS + (owner)))
+#define SRC_POINTER  (1u << (1 + 2 * SMS_MAX_PADS))
+
+/* input.c: the joypads and the console's buttons, from every source. */
+void input_init(struct smssession *ses);
+/* Let go of every source and tell the host (a start). */
+void input_clear(struct smssession *ses);
+
 /* audio_sdl.c */
 int  audio_start(struct smssession *s);
 void audio_stop(struct smssession *s);
@@ -126,8 +146,14 @@ void audio_stop(struct smssession *s);
 /* gamepad_sdl.c */
 int  gamepad_start(struct smssession *s);
 void gamepad_stop(struct smssession *s);
-/* Called by the gamepad thread with the button/axis state it resolved. */
-void session_gamepad_apply(struct smssession *s, int port, int act, int down);
+/* Called by the gamepad thread for the pad that owns `owner`. press: a pad
+ * button drives a target (a joypad contact or a console button) -- the pad's
+ * SRC_PAD source. stick: the analog stick or hat drives a joypad contact --
+ * its SRC_STICK source. */
+void session_gamepad_press(struct smssession *ses, int owner, int target, int down);
+void session_gamepad_stick(struct smssession *ses, int owner, int port, int act, int down);
+/* The live "analog sticks drive the D-pad" flag, read under input_mtx. */
+int session_analog_joystick(struct smssession *ses);
 /* Called by the gamepad thread on a connect/disconnect. */
 void session_gamepad_event(struct smssession *s, const char *text);
 

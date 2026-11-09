@@ -11,26 +11,29 @@
  * mapping for (a plain HID adapter) is opened as a raw joystick instead:
  * its buttons and hats are bindable in the raw bands, just unnamed.
  *
- * What a pad drives is the port's joypad: the D-pad (and, with "analog
- * sticks drive the D-pad" on, the left stick as a four-way switch with
- * hysteresis) is the joypad's cross; buttons 1 and 2 come from the bindings
- * table.
- *
- * Buttons go through the bindings table (a port's buttons, the console's
- * Pause and Reset, the system actions); a D-pad direction the user has
- * bound to something explicit stops also nudging the directional role.
- * Ported from the NES sibling's gamepad_sdl.c.
+ * What a pad drives is one port's joypad (the first pad is player 1, the
+ * second player 2). Every button goes through the bindings table: by
+ * default the D-pad is the joypad's cross, South and East are buttons 1 and
+ * 2, Start is the console's Pause and Back its Reset, and a button may be
+ * bound to another contact, a console button, a system action or a keyboard
+ * key instead. With "analog sticks drive the D-pad" on, the left analog
+ * stick is also the joypad's cross: a four-way switch with hysteresis (in at
+ * 0.35 deflection, out at 0.15); hat 0 of a raw joystick always is. The ways of
+ * holding an input -- a pad button, the analog stick, the keyboard -- are
+ * separate sources in the session, so letting go of one never releases
+ * another. Ported from the Channel F sibling's gamepad_sdl.c.
  *
  * Pads are assigned to ports in connection order unless assigned explicitly.
- * A pad that is unplugged and plugged back in (matched by its SDL GUID and
- * name) gets its explicit assignment back, and every connect/disconnect is
- * reported to the session for the frontend's toast.
+ * An explicit assignment is remembered (settings key "pad_assign", see
+ * pad_assign.h): a pad that is unplugged and plugged back in, or is there on
+ * the next run, gets it back -- matched by its SDL GUID, else by its name.
+ * Two identical pads share one entry; the first to connect gets it. Every
+ * connect/disconnect is reported to the session for the frontend's toast.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -40,29 +43,34 @@
 #include <SDL3/SDL.h>
 
 #include "gamepad_sdl.h"
+#include "pad_assign.h"
 #include "session_internal.h"
 
-#define MAX_PADS 8
+#define MAX_PADS SMS_MAX_PADS
 #define MAX_HATS 4
 
-/* A third of full deflection engages, a sixth releases: low enough that a
- * worn stick still registers, high enough that resting drift does not, and
- * a gap wide enough that jitter across one threshold cannot flutter. */
-#define STICK_ENTER 0.35f
-#define STICK_EXIT  0.15f
 #define TRIGGER_ON  0.5f
 
 typedef struct {
     SDL_JoystickID id;
+    int owner;                /* the session's source number for this pad: stable
+                               * while it is connected, whatever its slot */
     SDL_Gamepad *handle;      /* mapped gamepad, or NULL */
     SDL_Joystick *joy;        /* raw joystick when not a gamepad */
     int assign;               /* explicit port, -1 = automatic */
+    int by_name;              /* assign was restored from a name-only match
+                               * (the entry's GUID differs): an exact-GUID
+                               * pad may take it over */
     int port;                 /* the port it drove on the last poll, or -1 */
     int stick_dir;            /* left stick's four-way state (hysteresis) */
-    int dpad_dir;             /* D-pad / hat 0 state */
-    uint8_t sent[SMS_ACT_PER_PORT]; /* directional actions currently held */
+    uint8_t sent[SMS_ACT_PER_PORT]; /* contacts the analog sticks / hat hold */
+    /* What each button's press asserted (target + 1, 0 = nothing), so its
+     * release lets go of exactly that even if the binding changed meanwhile,
+     * and a pad that goes away drops what it held. */
+    int16_t btn_target[256];
     SDL_GUID guid;
-    char name[64];
+    char guidstr[SMS_PAD_GUID_MAX];   /* guid as hex, for the pad_assign table */
+    char name[SMS_PAD_NAME_MAX];
     int trigger_down[2];
     Uint8 last_hat[MAX_HATS];
 } pad_slot;
@@ -78,14 +86,25 @@ typedef struct {
     unsigned generation;
     /* Map-mode capture */
     int cap_active, cap_have, cap_result;
-    /* explicit assignments of pads that went away, for when they come back */
-    struct { SDL_GUID guid; char name[64]; int assign; int used; } gone[MAX_PADS];
-    int gone_next;
+    /* the remembered explicit assignments (the "pad_assign" setting), for
+     * pads that are away as well as those here; guarded by lock */
+    sms_pad_table table;
 } gamepad_state;
 
 static gamepad_state *g_state;   /* one per process: SDL's subsystem is */
 
 /* ---- pure helpers ----------------------------------------------------------- */
+
+unsigned sms_acts_from_dir(int dir)
+{
+    unsigned acts = 0;
+
+    if ((dir & SMS_DIR_UP) && !(dir & SMS_DIR_DOWN)) acts |= 1u << SMS_ACT_UP;
+    if ((dir & SMS_DIR_DOWN) && !(dir & SMS_DIR_UP)) acts |= 1u << SMS_ACT_DOWN;
+    if ((dir & SMS_DIR_LEFT) && !(dir & SMS_DIR_RIGHT)) acts |= 1u << SMS_ACT_LEFT;
+    if ((dir & SMS_DIR_RIGHT) && !(dir & SMS_DIR_LEFT)) acts |= 1u << SMS_ACT_RIGHT;
+    return acts;
+}
 
 int sms_dir_from_stick(float x, float y, int prev, float enter, float exit)
 {
@@ -176,11 +195,17 @@ static const char *slot_name(const pad_slot *slot)
 static void slot_release_all(gamepad_state *g, pad_slot *slot)
 {
     int a;
-    if (slot->port < 0) return;
-    for (a = 0; a < SMS_ACT_PER_PORT; a++)
-        if (slot->sent[a]) {
-            slot->sent[a] = 0;
-            session_gamepad_apply(g->session, slot->port, a, 0);
+    int btn;
+    if (slot->port >= 0)
+        for (a = 0; a < SMS_ACT_PER_PORT; a++)
+            if (slot->sent[a]) {
+                slot->sent[a] = 0;
+                session_gamepad_stick(g->session, slot->owner, slot->port, a, 0);
+            }
+    for (btn = 0; btn < (int)(sizeof slot->btn_target / sizeof slot->btn_target[0]); btn++)
+        if (slot->btn_target[btn]) {
+            session_gamepad_press(g->session, slot->owner, slot->btn_target[btn] - 1, 0);
+            slot->btn_target[btn] = 0;
         }
 }
 
@@ -194,6 +219,33 @@ static void slot_close(gamepad_state *g, pad_slot *slot)
 }
 
 static int effective_port_locked(gamepad_state *g, int idx);
+
+/* Gives the pad in slot idx its remembered port. An entry with the pad's own
+ * GUID is the pad's: it takes it from a pad that got it only through the name
+ * fallback. A pad known only by name takes the entry if no other pad carries
+ * it (two identical pads, or one pad known under two GUIDs): then this one
+ * stays automatic. Locked by the caller; only reads settings' copy in
+ * gst->table, never writes. */
+static void restore_assignment(gamepad_state *gst, int idx)
+{
+    pad_slot *slot = &gst->pads[idx];
+    int ent = sms_pad_table_find(&gst->table, slot->guidstr, slot->name), kix;
+    int exact;
+
+    if (ent < 0 || gst->table.entry[ent].port >= SMS_PLAYERS) return;
+    exact = !strcmp(gst->table.entry[ent].guid, slot->guidstr);
+    for (kix = 0; kix < gst->npads; kix++) {
+        pad_slot *other = &gst->pads[kix];
+        if (kix == idx || other->assign < 0 ||
+            sms_pad_table_find(&gst->table, other->guidstr, other->name) != ent)
+            continue;
+        if (!exact || !other->by_name) return;
+        other->assign = -1;          /* the entry's owner is here: it wins */
+        other->by_name = 0;
+    }
+    slot->assign = gst->table.entry[ent].port;
+    slot->by_name = !exact;
+}
 
 /* Idempotent, and the single place the gamepad/joystick decision is made:
  * both SDL_EVENT_JOYSTICK_ADDED and SDL_EVENT_GAMEPAD_ADDED land here (SDL
@@ -211,7 +263,12 @@ static void open_pad(gamepad_state *g, SDL_JoystickID id)
         if (gp || j) {
             pad_slot *slot = &g->pads[g->npads++];
             int h;
+            int used = 0, own;
+            for (own = 0; own < g->npads - 1; own++)
+                used |= 1 << g->pads[own].owner;
             memset(slot, 0, sizeof *slot);
+            for (own = 0; own < MAX_PADS && (used & (1 << own)); own++) {}
+            slot->owner = own;
             slot->id = id;
             slot->handle = gp;
             slot->joy = j;
@@ -220,14 +277,8 @@ static void open_pad(gamepad_state *g, SDL_JoystickID id)
             for (h = 0; h < MAX_HATS; h++) slot->last_hat[h] = SDL_HAT_CENTERED;
             slot->guid = SDL_GetJoystickGUIDForID(id);
             snprintf(slot->name, sizeof slot->name, "%s", slot_name(slot));
-            for (h = 0; h < MAX_PADS; h++) {
-                if (g->gone[h].used && !memcmp(&g->gone[h].guid, &slot->guid, sizeof slot->guid)
-                    && !strcmp(g->gone[h].name, slot->name)) {
-                    slot->assign = g->gone[h].assign;
-                    g->gone[h].used = 0;
-                    break;
-                }
-            }
+            SDL_GUIDToString(slot->guid, slot->guidstr, sizeof slot->guidstr);
+            restore_assignment(g, g->npads - 1);
             g->generation++;
             fprintf(stderr, "sms gamepad: %s connected (%s)\n", slot->name,
                     gp ? "gamepad" : "raw joystick");
@@ -255,13 +306,6 @@ static void close_pad(gamepad_state *g, SDL_JoystickID id)
         char msg[128];
         fprintf(stderr, "sms gamepad: %s disconnected\n", slot->name);
         snprintf(msg, sizeof msg, "Disconnected: %s", slot->name);
-        if (slot->assign >= 0) {
-            int k = g->gone_next++ % MAX_PADS;
-            g->gone[k].guid = slot->guid;
-            memcpy(g->gone[k].name, slot->name, sizeof g->gone[k].name);
-            g->gone[k].assign = slot->assign;
-            g->gone[k].used = 1;
-        }
         slot_close(g, slot);
         session_gamepad_event(g->session, msg);
         for (i = idx; i < g->npads - 1; i++) g->pads[i] = g->pads[i + 1];
@@ -286,34 +330,45 @@ static int effective_port_locked(gamepad_state *g, int idx)
 
 static void dispatch_button(gamepad_state *g, SDL_JoystickID which, int b, int down)
 {
-    int idx, port, target;
+    int idx, port, owner = 0, target = -1;
     if (b == SMS_PAD_BTN_NONE) return;
 
     pthread_mutex_lock(&g->lock);
-    if (g->cap_active) {
-        /* Map mode: every button event is swallowed while armed, not just
-         * the captured one, so the press that maps a button does not also
-         * fire whatever it used to do. */
-        if (down && !g->cap_have) { g->cap_have = 1; g->cap_result = b; }
-        pthread_mutex_unlock(&g->lock);
-        return;
-    }
     idx = slot_for_id(g, which);
+    if (g->cap_active) {
+        /* Map mode: every press is swallowed while armed, not just the
+         * captured one, so the press that maps a button does not also fire
+         * whatever it used to do. A release of a button held before Map
+         * armed still goes through, or its target would stay asserted. */
+        int held = !down && idx >= 0 && b >= 0 && b < 256 && g->pads[idx].btn_target[b];
+        if (!held) {
+            if (down && !g->cap_have) { g->cap_have = 1; g->cap_result = b; }
+            pthread_mutex_unlock(&g->lock);
+            return;
+        }
+    }
     port = idx >= 0 ? effective_port_locked(g, idx) : -1;
+    if (idx >= 0 && port >= 0 && b >= 0 && b < 256) {
+        pad_slot *slot = &g->pads[idx];
+        owner = slot->owner;
+        if (down) {
+            target = smssession_target_for_button(g->session, port, b);
+            if (target >= 0 && target < SMS_TARGET_SYSACT(0))
+                slot->btn_target[b] = (int16_t)(target + 1);
+        } else if (slot->btn_target[b]) {
+            /* what the press asserted, whatever the binding says now */
+            target = slot->btn_target[b] - 1;
+            slot->btn_target[b] = 0;
+        }
+    }
     pthread_mutex_unlock(&g->lock);
-    if (port < 0) return;
-
-    target = smssession_target_for_button(g->session, port, b);
     if (target < 0) return;
+
     if (target >= SMS_TARGET_SYSACT(0)) {
         if (down) smssession_sysaction_post(g->session, target - SMS_TARGET_SYSACT(0));
         return;
     }
-    if (target < 2 * SMS_ACT_PER_PORT)
-        session_gamepad_apply(g->session, target / SMS_ACT_PER_PORT,
-                              target % SMS_ACT_PER_PORT, down);
-    else
-        smssession_press(g->session, target, down);
+    session_gamepad_press(g->session, owner, target, down);
 }
 
 static int hat_dir_from_mask(Uint8 mask)
@@ -350,7 +405,7 @@ static void handle_hat_motion(gamepad_state *g, SDL_JoystickID which, int hat, U
         dispatch_button(g, which, SMS_PAD_HAT_BASE + hat * SMS_PAD_HAT_DIRS + dir, 1);
 }
 
-/* ---- the directional role and the analog controllers ------------------------ */
+/* ---- the sticks -------------------------------------------------------------- */
 
 static float axis_norm(Sint16 v)
 {
@@ -369,22 +424,12 @@ static void slot_stick(const pad_slot *slot, int right, float *x, float *y)
     }
 }
 
-static int slot_dpad(gamepad_state *g, const pad_slot *slot, int port)
+/* The raw joystick's hat 0 as directions (a mapped gamepad's D-pad is a
+ * button, bound like any other). */
+static int slot_hat_dir(const pad_slot *slot)
 {
     int dir = 0;
-    if (slot->handle) {
-        /* a D-pad direction the user bound explicitly no longer plays the
-         * directional role -- otherwise a button remapped to a keypad key
-         * would also nudge the joystick every poll */
-        if (smssession_target_for_button(g->session, port, SMS_PAD_BTN_DPAD_UP) < 0
-            && SDL_GetGamepadButton(slot->handle, SDL_GAMEPAD_BUTTON_DPAD_UP)) dir |= SMS_DIR_UP;
-        if (smssession_target_for_button(g->session, port, SMS_PAD_BTN_DPAD_DOWN) < 0
-            && SDL_GetGamepadButton(slot->handle, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) dir |= SMS_DIR_DOWN;
-        if (smssession_target_for_button(g->session, port, SMS_PAD_BTN_DPAD_LEFT) < 0
-            && SDL_GetGamepadButton(slot->handle, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) dir |= SMS_DIR_LEFT;
-        if (smssession_target_for_button(g->session, port, SMS_PAD_BTN_DPAD_RIGHT) < 0
-            && SDL_GetGamepadButton(slot->handle, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) dir |= SMS_DIR_RIGHT;
-    } else if (SDL_GetNumJoystickHats(slot->joy) > 0) {
+    if (!slot->handle && slot->joy && SDL_GetNumJoystickHats(slot->joy) > 0) {
         Uint8 m = SDL_GetJoystickHat(slot->joy, 0);
         if (m & SDL_HAT_UP) dir |= SMS_DIR_UP;
         if (m & SDL_HAT_DOWN) dir |= SMS_DIR_DOWN;
@@ -392,11 +437,6 @@ static int slot_dpad(gamepad_state *g, const pad_slot *slot, int port)
         if (m & SDL_HAT_RIGHT) dir |= SMS_DIR_RIGHT;
     }
     return dir;
-}
-
-static void want_action(uint8_t *want, int act, int on)
-{
-    if (on) want[act] = 1;
 }
 
 /* A trigger crossing its threshold. Dispatched by poll_sticks once it has
@@ -412,8 +452,8 @@ typedef struct {
 static void poll_one(gamepad_state *g, pad_slot *slot, int port,
                      trigger_edge *edges, int *nedges)
 {
-    const struct smssession *s = g->session;
     uint8_t want[SMS_ACT_PER_PORT];
+    unsigned acts;
     int dir, a;
     float lx, ly;
 
@@ -426,23 +466,24 @@ static void poll_one(gamepad_state *g, pad_slot *slot, int port,
         if (port < 0) return;
     }
 
-    slot->dpad_dir = slot_dpad(g, slot, port);
-    slot_stick(slot, 0, &lx, &ly);
-
-    dir = slot->dpad_dir;
-    if (s->opts.analog_joystick) {
-        slot->stick_dir = sms_dir_from_stick(lx, ly, slot->stick_dir, STICK_ENTER, STICK_EXIT);
+    /* a raw joystick's hat 0, and with "analog sticks drive the D-pad" the
+     * left stick, are the joypad's cross */
+    dir = slot_hat_dir(slot);
+    if (session_analog_joystick(g->session) && (slot->handle || slot->joy)) {
+        slot_stick(slot, 0, &lx, &ly);
+        slot->stick_dir = sms_dir_from_stick(lx, ly, slot->stick_dir, SMS_STICK_ENTER, SMS_STICK_EXIT);
         dir |= slot->stick_dir;
+    } else {
+        slot->stick_dir = 0;
     }
-    want_action(want, SMS_ACT_UP, dir & SMS_DIR_UP);
-    want_action(want, SMS_ACT_DOWN, dir & SMS_DIR_DOWN);
-    want_action(want, SMS_ACT_LEFT, dir & SMS_DIR_LEFT);
-    want_action(want, SMS_ACT_RIGHT, dir & SMS_DIR_RIGHT);
+    acts = sms_acts_from_dir(dir);
 
+    for (a = 0; a < SMS_ACT_PER_PORT; a++)
+        want[a] = (uint8_t)((acts >> a) & 1u);
     for (a = 0; a < SMS_ACT_PER_PORT; a++) {
         if (want[a] != slot->sent[a]) {
             slot->sent[a] = want[a];
-            session_gamepad_apply(g->session, port, a, want[a]);
+            session_gamepad_stick(g->session, slot->owner, port, a, want[a]);
         }
     }
 
@@ -494,13 +535,12 @@ static void *thread_main(void *arg)
 
     while (!atomic_load(&g->stop_requested)) {
         SDL_Event ev;
-        int npads, have;
+        int npads;
 
         pthread_mutex_lock(&g->lock);
         npads = g->npads;
         pthread_mutex_unlock(&g->lock);
-        have = SDL_PollEvent(&ev);
-        while (have) {
+        while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_EVENT_JOYSTICK_ADDED: open_pad(g, ev.jdevice.which); break;
             case SDL_EVENT_JOYSTICK_REMOVED: close_pad(g, ev.jdevice.which); break;
@@ -533,7 +573,6 @@ static void *thread_main(void *arg)
             default:
                 break;
             }
-            have = SDL_PollEvent(&ev);
         }
         poll_sticks(g);
         /* ~60 Hz while a pad is attached (the machine's own sampling rate).
@@ -566,6 +605,8 @@ int gamepad_start(struct smssession *s)
     g = calloc(1, sizeof *g);
     if (!g) { SDL_QuitSubSystem(SDL_INIT_GAMEPAD); return -1; }
     g->session = s;
+    /* the remembered assignments, once: garbage or no key is an empty table */
+    sms_pad_table_decode(&g->table, smssession_get_str(s, "pad_assign", ""), SMS_PLAYERS);
     pthread_mutex_init(&g->lock, NULL);
     /* An explicit stack: the platform default is 512 KB on macOS, and SDL's
      * HID enumeration runs on this thread. */
@@ -630,11 +671,37 @@ int smssession_gamepad_name(smssession *s, int idx, char *dst, int dstsz)
 void smssession_gamepad_assign(smssession *s, int idx, int port)
 {
     gamepad_state *g = s->gamepad;
+    char text[SMS_PAD_ASSIGN_TEXT_MAX];
+    int changed = 0;
     if (!g) return;
     pthread_mutex_lock(&g->lock);
-    if (idx >= 0 && idx < g->npads)
-        g->pads[idx].assign = (port >= 0 && port < 2) ? port : -1;
+    if (idx >= 0 && idx < g->npads) {
+        pad_slot *slot = &g->pads[idx];
+        if (port >= 0 && port < SMS_PLAYERS) {
+            slot->assign = port;
+            slot->by_name = 0;
+            changed = sms_pad_table_set(&g->table, slot->guidstr, slot->name, port) > 0;
+        } else {
+            const char *kguid[MAX_PADS], *kname[MAX_PADS];
+            int kix, nkeep = 0;
+            slot->assign = -1;
+            slot->by_name = 0;
+            for (kix = 0; kix < g->npads; kix++)
+                if (kix != idx && g->pads[kix].assign >= 0) {
+                    kguid[nkeep] = g->pads[kix].guidstr;
+                    kname[nkeep++] = g->pads[kix].name;
+                }
+            changed = sms_pad_table_remove(&g->table, slot->guidstr, slot->name,
+                                           nkeep, kguid, kname);
+        }
+        if (changed && sms_pad_table_encode(&g->table, text, sizeof text) < 0)
+            changed = 0;
+    }
     pthread_mutex_unlock(&g->lock);
+    /* the settings file is written here, on the caller's thread, with the
+     * pad lock let go: the pad thread must never wait on a file write */
+    if (changed)
+        smssession_set_str(s, "pad_assign", text);
 }
 
 int smssession_gamepad_assignment(smssession *s, int idx)

@@ -5,7 +5,7 @@
  * One flat target table (smssession.h's SMS_TARGET_* indices): per port
  * the joypad's six inputs (the cross and buttons 1 and 2); then the
  * console's Pause and Reset buttons; then the session's own actions.
- * Ported from the NES sibling's bindings.c.
+ * Ported from the NES sibling's bindings.c, then the Channel F one's.
  * Each target holds at most one keysym and one gamepad button. Rebinding
  * STEALS -- a key drives exactly one target, because one keystroke doing
  * two things is worse than losing the old binding: the second effect is
@@ -90,15 +90,19 @@ static void compute_defaults_locked(void)
     seed_key(SMS_TARGET_SYSACT(SMS_SYSACT_RESET_CONFIG), SMS_KEYSYM_ESCAPE);
     seed_key(SMS_TARGET_SYSACT(SMS_SYSACT_SOFT_RESET), SMS_KEYSYM_F3);
 
-    /* gamepad defaults, uniform on both ports, by position: the joypad's 1
+    /* gamepad defaults, uniform on both ports, by position: the D-pad is the
+     * joypad's cross (a bindable button like any other; the left stick and a
+     * raw joystick's hat 0 are hard-wired in gamepad_sdl.c), the joypad's 1
      * and 2 sit left and right on one row, so South is 1 and East is 2.
      * Start is the console's Pause (it is on the console, but a pad's Start
-     * is where a thumb looks for it) and Back its Reset. Directions come
-     * from the D-pad and the left stick in gamepad_sdl.c, not from
-     * bindings. */
+     * is where a thumb looks for it) and Back its Reset. */
     {
         int port;
-        for (port = 0; port < 2; port++) {
+        for (port = 0; port < SMS_PLAYERS; port++) {
+            seed_button(SMS_TARGET_PORT(port, SMS_ACT_UP), SMS_PAD_BTN_DPAD_UP);
+            seed_button(SMS_TARGET_PORT(port, SMS_ACT_DOWN), SMS_PAD_BTN_DPAD_DOWN);
+            seed_button(SMS_TARGET_PORT(port, SMS_ACT_LEFT), SMS_PAD_BTN_DPAD_LEFT);
+            seed_button(SMS_TARGET_PORT(port, SMS_ACT_RIGHT), SMS_PAD_BTN_DPAD_RIGHT);
             seed_button(SMS_TARGET_PORT(port, SMS_ACT_1), SMS_PAD_BTN_SOUTH);
             seed_button(SMS_TARGET_PORT(port, SMS_ACT_2), SMS_PAD_BTN_EAST);
         }
@@ -122,19 +126,48 @@ static uint32_t fold(uint32_t keysym)
 
 /* ---- persistence ---------------------------------------------------------- */
 
+/* Whether button targets `one` and `two` compete for a pad button: the same
+ * port, or either one is machine-wide (the switches and actions, which every
+ * pad reaches). */
+static int same_button_scope(int one, int two)
+{
+    const int port_one = one / SMS_ACT_PER_PORT, port_two = two / SMS_ACT_PER_PORT;
+    return port_one == port_two || port_one >= SMS_PLAYERS || port_two >= SMS_PLAYERS;
+}
+
 static void apply_persisted_locked(const char *packed)
 {
     const char *p = packed;
+    char has_button[SMS_TARGET_COUNT];
+    int one, two;
+
+    memset(has_button, 0, sizeof has_button);
     while (p && *p) {
         int target = -1; char kind = 0; long value = 0;
         const char *end = strchr(p, ' ');
         if (sscanf(p, "%d.%c:%ld", &target, &kind, &value) == 3
             && target >= 0 && target < SMS_TARGET_COUNT) {
             if (kind == 'k') s_table[target].keysym = (uint32_t)value;
-            else if (kind == 'b') s_table[target].button = (int)value;
+            else if (kind == 'b') {
+                s_table[target].button = (int)value;
+                has_button[target] = 1;
+            }
         }
         if (!end) break;
         p = end + 1;
+    }
+
+    /* Before the D-pad was a bindable button its directions were a hard-wired
+     * role that a rebinding of the same button switched off. Now the table
+     * seeds them, so a stored binding of a D-pad button (or any button) to
+     * another target must displace a default that only the new seeds put on
+     * it: otherwise one press would drive two targets in the same scope. */
+    for (one = 0; one < SMS_TARGET_COUNT; one++) {
+        if (!has_button[one] || s_table[one].button == SMS_PAD_BTN_NONE) continue;
+        for (two = 0; two < SMS_TARGET_COUNT; two++)
+            if (two != one && !has_button[two] && same_button_scope(one, two)
+                && s_table[two].button == s_table[one].button)
+                s_table[two].button = SMS_PAD_BTN_NONE;
     }
 }
 
@@ -215,13 +248,14 @@ int smssession_target_for_button(smssession *s, int port, int button)
     if (button == SMS_PAD_BTN_NONE) return -1;
     pthread_mutex_lock(&s_lock);
     ensure_seeded_locked();
+    if (port < 0 || port >= SMS_PLAYERS) port = 0;
     for (t = 0; t < SMS_ACT_PER_PORT; t++)
         if (s_table[SMS_TARGET_PORT(port, t)].button == button) {
             found = SMS_TARGET_PORT(port, t);
             break;
         }
     if (found < 0)
-        for (t = 2 * SMS_ACT_PER_PORT; t < SMS_TARGET_COUNT; t++)
+        for (t = SMS_PLAYERS * SMS_ACT_PER_PORT; t < SMS_TARGET_COUNT; t++)
             if (s_table[t].button == button) { found = t; break; }
     pthread_mutex_unlock(&s_lock);
     return found;
@@ -281,18 +315,16 @@ void smssession_binding_set_button(smssession *s, int target, int button,
                                      char *stolen, int stolensz)
 {
     int victims[SMS_TARGET_COUNT], nvictims = 0, t;
-    int port = target / SMS_ACT_PER_PORT;   /* 2 = switches/sysactions */
     (void)s;
     if (target < 0 || target >= SMS_TARGET_COUNT) return;
     pthread_mutex_lock(&s_lock);
     ensure_seeded_locked();
     if (button != SMS_PAD_BTN_NONE) {
         for (t = 0; t < SMS_TARGET_COUNT; t++) {
-            int tport = t / SMS_ACT_PER_PORT;
             /* steal only within the same scope: this port, or the
              * machine-wide targets, which every pad reaches */
             if (t != target && s_table[t].button == button
-                && (tport == port || tport >= 2 || port >= 2)) {
+                && same_button_scope(t, target)) {
                 s_table[t].button = SMS_PAD_BTN_NONE;
                 victims[nvictims++] = t;
             }
@@ -334,12 +366,12 @@ const char *sms_target_name(int target)
 {
     static char buf[64];
     if (target < 0 || target >= SMS_TARGET_COUNT) return "";
-    if (target < 2 * SMS_ACT_PER_PORT) {
+    if (target < SMS_PLAYERS * SMS_ACT_PER_PORT) {
         snprintf(buf, sizeof buf, "Player %d: %s", target < SMS_ACT_PER_PORT ? 1 : 2,
                  act_names[target % SMS_ACT_PER_PORT]);
         return buf;
     }
-    target -= 2 * SMS_ACT_PER_PORT;
+    target -= SMS_PLAYERS * SMS_ACT_PER_PORT;
     if (target < SMS_SW_COUNT) return switch_names[target];
     return sysact_names[target - SMS_SW_COUNT];
 }
@@ -347,8 +379,8 @@ const char *sms_target_name(int target)
 const char *sms_target_short_name(int target)
 {
     if (target < 0 || target >= SMS_TARGET_COUNT) return "";
-    if (target < 2 * SMS_ACT_PER_PORT) return act_short[target % SMS_ACT_PER_PORT];
-    target -= 2 * SMS_ACT_PER_PORT;
+    if (target < SMS_PLAYERS * SMS_ACT_PER_PORT) return act_short[target % SMS_ACT_PER_PORT];
+    target -= SMS_PLAYERS * SMS_ACT_PER_PORT;
     if (target < SMS_SW_COUNT) return switch_names[target];
     return sysact_names[target - SMS_SW_COUNT];
 }
@@ -479,17 +511,5 @@ int smssession_key(smssession *s, uint32_t keysym, int down)
             }
         }
         return hit;
-    }
-}
-
-void smssession_release_all(smssession *s)
-{
-    int t;
-    if (!s) return;
-    for (t = 0; t < SMS_TARGET_COUNT; t++) {
-        if (s->held_keysym[t]) {
-            s->held_keysym[t] = 0;
-            smssession_press(s, t, 0);
-        }
     }
 }

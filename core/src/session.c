@@ -4,9 +4,10 @@
  *
  * The C modules beside it (settings, paths, media, roms, audio, gamepads,
  * bindings) share the session struct through session_internal.h; this file
- * owns the lifecycle, the power cycles, the cartridges, the input routing
- * and the cartridge status. Ported from the NES sibling's session.cpp, minus
- * MesenCE: the host here is this repository's own C core.
+ * owns the lifecycle, the power cycles, the cartridges and the cartridge
+ * status; the input sources are merged in input.c. Ported from the NES
+ * sibling's session.cpp, minus MesenCE: the host here is this repository's
+ * own C core.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -130,6 +131,7 @@ smssession *smssession_new(const smssession_paths *paths)
     pthread_mutex_init(&s->settings_mtx, NULL);
     pthread_mutex_init(&s->sysact_mtx, NULL);
     pthread_mutex_init(&s->pad_event_mtx, NULL);
+    input_init(s);
 
     if (paths_init(s, paths ? paths->config_dir : NULL,
                    paths ? paths->data_dir : NULL) != 0) {
@@ -161,6 +163,7 @@ void smssession_free(smssession *s)
     pthread_mutex_destroy(&s->settings_mtx);
     pthread_mutex_destroy(&s->sysact_mtx);
     pthread_mutex_destroy(&s->pad_event_mtx);
+    pthread_mutex_destroy(&s->input_mtx);
     free(s);
 }
 
@@ -386,9 +389,7 @@ int smssession_start(smssession *s, const smssession_start_opts *opts)
         opts = &local;
     }
     adopt_opts(s, opts);
-    memset(s->pad_src, 0, sizeof s->pad_src);
-    memset(s->sw_src, 0, sizeof s->sw_src);
-    sms_host_release_all();
+    input_clear(s);
     smsdebug_trace_fujinet(s);
 
     /* An external FujiNet is dialed at the address the settings name; a bad
@@ -638,139 +639,6 @@ void smssession_set_volume(smssession *s, int percent)
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     smssession_set_int(s, "volume", percent);
-}
-
-/* ---- input ----------------------------------------------------------------- */
-
-static void apply_pad(struct smssession *s, int port)
-{
-    uint8_t mask = 0;
-    static const uint8_t bit[SMS_ACT_PER_PORT] = {
-        SMS_PAD_UP, SMS_PAD_DOWN, SMS_PAD_LEFT, SMS_PAD_RIGHT, SMS_PAD_1, SMS_PAD_2,
-    };
-    for (int a = 0; a < SMS_ACT_PER_PORT; a++)
-        if (s->pad_src[port][a])
-            mask |= bit[a];
-    sms_host_pad_set(port, mask);
-}
-
-static void pad_src(struct smssession *s, int port, int act, int down, uint8_t src)
-{
-    if (down)
-        s->pad_src[port][act] |= src;
-    else
-        s->pad_src[port][act] &= (uint8_t)~src;
-    apply_pad(s, port);
-}
-
-static void switch_src(struct smssession *s, int sw, int down, uint8_t src)
-{
-    if (down)
-        s->sw_src[sw] |= src;
-    else
-        s->sw_src[sw] &= (uint8_t)~src;
-    if (sw == SMS_SW_PAUSE)
-        sms_host_pause_set(s->sw_src[sw] != 0);
-    else if (sw == SMS_SW_RESET)
-        sms_host_reset_button_set(s->sw_src[sw] != 0);
-}
-
-void smssession_press(smssession *s, int target, int down)
-{
-    if (!s->running || target < 0 || target >= SMS_TARGET_COUNT)
-        return;
-
-    if (target < 2 * SMS_ACT_PER_PORT) {
-        pad_src(s, target / SMS_ACT_PER_PORT, target % SMS_ACT_PER_PORT, down, 1);
-        return;
-    }
-    target -= 2 * SMS_ACT_PER_PORT;
-    if (target < SMS_SW_COUNT) {
-        switch_src(s, target, down, 1);
-        return;
-    }
-    if (down)
-        smssession_sysaction(s, target - SMS_SW_COUNT);
-}
-
-void smssession_sysaction(smssession *s, int sysact)
-{
-    switch (sysact) {
-    case SMS_SYSACT_RESET_CONFIG:
-        smssession_reset_to_config(s);
-        break;
-    case SMS_SYSACT_SOFT_RESET:
-        smssession_soft_reset(s);
-        break;
-    case SMS_SYSACT_DEBUG_STOP:
-        if (s->running) {
-            smsdebug *d = smsdebug_get(s);
-            smsdebug_attach(d);
-            smsdebug_stop(d);
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-void smssession_sysaction_post(smssession *s, int sysact)
-{
-    if (sysact < 0 || sysact >= SMS_SYSACT_COUNT)
-        return;
-    pthread_mutex_lock(&s->sysact_mtx);
-    s->sysact_pending |= 1u << sysact;
-    pthread_mutex_unlock(&s->sysact_mtx);
-}
-
-int smssession_sysaction_take(smssession *s, int *out)
-{
-    int found = 0;
-    pthread_mutex_lock(&s->sysact_mtx);
-    for (int i = 0; i < SMS_SYSACT_COUNT; i++) {
-        if (s->sysact_pending & (1u << i)) {
-            s->sysact_pending &= ~(1u << i);
-            if (out)
-                *out = i;
-            found = 1;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&s->sysact_mtx);
-    return found;
-}
-
-unsigned smssession_buttons_held(smssession *s, int port)
-{
-    unsigned held = 0;
-    if (port < 0 || port > 1)
-        return 0;
-    for (int a = 0; a < SMS_ACT_PER_PORT; a++)
-        if (s->pad_src[port][a])
-            held |= 1u << a;
-    return held;
-}
-
-int smssession_switch_held(smssession *s, int sw)
-{
-    if (sw < 0 || sw >= SMS_SW_COUNT)
-        return 0;
-    return s->sw_src[sw] != 0;
-}
-
-/* The gamepad thread's entry point: the same routing as press, from the
- * pad's own source bit, never touching the settings or the debugger. */
-void session_gamepad_apply(struct smssession *s, int port, int act, int down)
-{
-    if (!s->running || port < 0 || port > 1 || act < 0 || act >= SMS_ACT_PER_PORT)
-        return;
-    pad_src(s, port, act, down, 2);
-}
-
-void smssession_set_analog(smssession *s, int joystick)
-{
-    s->opts.analog_joystick = joystick ? 1 : 0;
-    smssession_set_int(s, "analog_joystick", s->opts.analog_joystick);
 }
 
 /* ---- FujiNet --------------------------------------------------------------- */

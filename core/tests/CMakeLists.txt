@@ -55,6 +55,12 @@ add_test(NAME vdp_decode COMMAND vdp_decode_test)
 sms_test(fujitrace_test fujitrace_test.c)
 add_test(NAME fujitrace COMMAND fujitrace_test)
 
+# The remembered pad -> port table (the "pad_assign" setting's text form):
+# encode, decode, lookup by GUID then name, the cap, malformed input. Pure.
+sms_test(pad_assign_test pad_assign_test.c)
+target_include_directories(pad_assign_test PRIVATE "${CMAKE_SOURCE_DIR}/core/src")
+add_test(NAME pad_assign COMMAND pad_assign_test)
+
 # These need the session layer, which needs SDL3. On a build without it
 # (a cross-toolchain, or a lean machine) only the core libraries build.
 if(TARGET sms_session)
@@ -91,6 +97,19 @@ add_test(NAME help COMMAND help_test)
 # The remappable binding table and the keyboard translator, pure.
 sms_session_test(bindings_test bindings_test.c)
 add_test(NAME bindings COMMAND bindings_test)
+
+# The on-screen controllers' layout (per console: PAUSE, RESET / RAPID where
+# the model has them, two Control Pads), its hit test and the D-pad's drag
+# maths. No machine is started.
+sms_session_test(controls_test controls_test.c)
+add_test(NAME controls COMMAND controls_test)
+
+# The input source merge: keys, the window's pointer and each pad's buttons
+# and stick are separate sources of one contact, opposed directions cancel,
+# release_all lets go of the keyboard only, and two threads agree.
+sms_session_test(input_test input_test.c)
+add_test(NAME input COMMAND input_test)
+set_tests_properties(input PROPERTIES TIMEOUT 120)
 
 # Where a dropped file goes, Import Cartridge to SD (with its .cfg), and
 # Import BIOS (identified by size and CRC; no Sega firmware involved).

@@ -70,8 +70,13 @@ foreach(_f debugger.c expr.c fujitrace.c prompt.c z80dasm.c symbols.c symbols_bu
   endif()
 endforeach()
 
+# src/pad_assign.c is the session's remembered pad -> port table, kept here
+# (pure, no SDL) so its test links the core alone.
+set(SMS_PAD_ASSIGN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/pad_assign.c")
+
 add_library(sms_core STATIC
-  ${SMS_EMU_SOURCES} ${SMS_FUJI_SOURCES} ${SMS_YMFM_SOURCES} ${SMS_DEBUGGER_SOURCES})
+  ${SMS_EMU_SOURCES} ${SMS_FUJI_SOURCES} ${SMS_YMFM_SOURCES} ${SMS_DEBUGGER_SOURCES}
+  ${SMS_PAD_ASSIGN_SOURCE})
 set_target_properties(sms_core PROPERTIES
   C_STANDARD 11
   CXX_STANDARD 17

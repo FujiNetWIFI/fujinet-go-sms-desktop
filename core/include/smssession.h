@@ -47,6 +47,8 @@ extern "C" {
  * the debugger's current line, the FujiNet status dot): the Master System
  * red, as on the icon. */
 #define SMSSESSION_ACCENT_RGB 0xE4002B
+/* 60% of the accent: ink (glyph strokes) drawn on an accent-filled control. */
+#define SMSSESSION_ACCENT_DARK_RGB 0x890019
 
 typedef struct smssession smssession;
 typedef struct smsdebug smsdebug;
@@ -236,20 +238,36 @@ typedef enum {
     SMS_SYSACT_COUNT
 } sms_sysaction;
 
-#define SMS_TARGET_PORT(port, act) ((port) * SMS_ACT_PER_PORT + (act))
-#define SMS_TARGET_SWITCH(sw)      (2 * SMS_ACT_PER_PORT + (sw))
-#define SMS_TARGET_SYSACT(sa)      (2 * SMS_ACT_PER_PORT + SMS_SW_COUNT + (sa))
-#define SMS_TARGET_COUNT           (2 * SMS_ACT_PER_PORT + SMS_SW_COUNT + SMS_SYSACT_COUNT)
+/* The two control ports. */
+#define SMS_PLAYERS 2
 
-/* Apply one control directly. `down` is press/release. The console buttons
- * are held, as the console samples them once a frame. */
+#define SMS_TARGET_PORT(port, act) ((port) * SMS_ACT_PER_PORT + (act))
+#define SMS_TARGET_SWITCH(swix)     (SMS_PLAYERS * SMS_ACT_PER_PORT + (swix))
+#define SMS_TARGET_SYSACT(sysix)    (SMS_PLAYERS * SMS_ACT_PER_PORT + SMS_SW_COUNT + (sysix))
+#define SMS_TARGET_COUNT           (SMS_PLAYERS * SMS_ACT_PER_PORT + SMS_SW_COUNT + SMS_SYSACT_COUNT)
+
+/* Apply one control from the keyboard source (and the Controllers window's
+ * console buttons). `down` is press/release. The console buttons are held,
+ * as the console samples them once a frame. Every way of holding an input
+ * (keyboard, the window's mouse, each gamepad's buttons and stick) is a
+ * separate source, so letting go of one never releases another. Safe from
+ * any thread. A system-action target fires on the down edge only. */
 void smssession_press(smssession *s, int target, int down);
 void smssession_sysaction(smssession *s, int sysact);
-/* Release everything the keyboard holds (focus loss). */
+/* Release everything the keyboard holds (focus loss): what keys and the
+ * window's console buttons asserted. Gamepads (own source) and the window's
+ * pointer (smssession_pointer_set) are left alone. */
 void smssession_release_all(smssession *s);
+/* The Controllers window's mouse as an input source: `mask` is the set of
+ * joypad contacts on `port` the pointer holds, one bit per sms_action
+ * (1u << SMS_ACT_UP ...); 0 lets go. Replaces the previous mask whole. Its
+ * own source: independent of keys and pads. A window calls it with 0 when
+ * it loses focus or hides. */
+void smssession_pointer_set(smssession *ses, int port, unsigned mask);
 /* What the console sees held on a port right now (keyboard, gamepads and
- * the on-screen controller together), one bit per sms_action. For a
- * controller window's highlights. */
+ * the on-screen controller together; UP+DOWN or LEFT+RIGHT held together
+ * cancel to neither, as the pad's switches do), one bit per sms_action.
+ * For a controller window's highlights. */
 unsigned smssession_buttons_held(smssession *s, int port);
 /* Whether a console button is held (sms_switch). */
 int smssession_switch_held(smssession *s, int sw);
@@ -346,14 +364,19 @@ void smssession_gamepad_capture_begin(smssession *s);
 void smssession_gamepad_capture_cancel(smssession *s);
 int  smssession_gamepad_capture_poll(smssession *s, int *button);
 
+/* Whether the left analog stick (and a raw joystick's hat 0) also drives the
+ * D-pad. Live; saved as "analog_joystick". */
 void smssession_set_analog(smssession *s, int joystick);
 
 /* ---- gamepads (SDL, hotplugged; started by smssession_start) -------------
  * Pads are assigned to ports in connection order unless assigned
- * explicitly. A pad that disconnects and reconnects gets its port back. */
+ * explicitly. An explicit assignment is remembered (settings key
+ * "pad_assign", matched by the pad's GUID, else its name): a pad that
+ * disconnects and reconnects, or is there at the next run, gets its port
+ * back. Setting Automatic forgets it. */
 int  smssession_gamepad_count(smssession *s);
 int  smssession_gamepad_name(smssession *s, int idx, char *dst, int dstsz);
-void smssession_gamepad_assign(smssession *s, int idx, int port); /* -1 = auto */
+void smssession_gamepad_assign(smssession *sess, int idx, int port); /* -1 = auto, else 0..SMS_PLAYERS-1 */
 int  smssession_gamepad_assignment(smssession *s, int idx);
 int  smssession_gamepad_effective_port(smssession *s, int idx);
 /* Bumped on every add/remove so a frontend can refresh its lists cheaply. */
@@ -361,6 +384,63 @@ unsigned smssession_gamepad_generation(smssession *s);
 /* The last hot-plug event as text ("Connected: 8BitDo SN30 Pro (player 1)",
  * "Disconnected: ..."), for a toast; returns length, 0 if none yet. */
 int  smssession_gamepad_last_event(smssession *s, char *dst, int dstsz);
+
+/* ---- the Controllers window's skin ----------------------------------------
+ * One layout for every toolkit: the console's top strip (Pause, and Reset or
+ * Rapid where the model has one) and two Control Pads (a D-pad and buttons 1
+ * and 2). Geometry only, in layout units (1.0 = one D-pad arm's width); the
+ * colours and key legends are the frontend's. Width and height are the same
+ * for every console, so the window never resizes when the console changes:
+ * only the entry list differs. Entries come back in painting order, so the
+ * hit test (which goes backwards) finds the topmost first. */
+typedef enum {
+    SMS_CTL_CONSOLE = 0,   /* the console's top strip: decor, not hit; legend is the wordmark */
+    SMS_CTL_SWITCH,        /* PAUSE, RESET/RAPID: held while pressed (smssession_press) */
+    SMS_CTL_PAD,           /* a joypad's body: decor, not hit */
+    SMS_CTL_DPAD,          /* the D-pad's disc: press and drag to hold 1-2 directions */
+    SMS_CTL_DIRECTION,     /* one of the four cross arms: holds exactly that direction */
+    SMS_CTL_BUTTON,        /* button 1 / button 2 */
+    SMS_CTL_CAPTION        /* "Player 1" / "Player 2": decor, not hit */
+} sms_control_kind;
+
+typedef struct {
+    int kind;              /* sms_control_kind */
+    const char *label;     /* "1", "2", "PAUSE", "RESET", "RAPID", "Up", "Down", "Left", "Right", "Player 1" */
+    const char *legend;    /* the CONSOLE's wordmark text ("SEGA MASTER SYSTEM II"), else NULL */
+    int port;              /* 0 / 1, or -1 for the console */
+    int target;            /* SMS_TARGET_*, or -1 (decor, the D-pad disc) */
+    unsigned act_mask;     /* sms_action bits it drives (1u << SMS_ACT_UP ...), 0 for decor */
+    float left, top, width, height;   /* layout units; for the DPAD the bounding box of its disc */
+} sms_control;
+
+/* The SEGA mark on a Control Pad (SMS_CTL_PAD), the same in every toolkit: a
+ * box over buttons 1 and 2, in layout units from the pad's top left, with the
+ * text centred in it, bold, at SMS_PAD_MARK_PX pixels (points on macOS) and
+ * SMS_PAD_MARK_SPACING between letters, both at 96 dpi. */
+#define SMS_PAD_MARK_LEFT    4.2f
+#define SMS_PAD_MARK_TOP     0.1f
+#define SMS_PAD_MARK_WIDTH   2.7f
+#define SMS_PAD_MARK_HEIGHT  0.9f
+#define SMS_PAD_MARK_PX      10
+#define SMS_PAD_MARK_SPACING 2
+
+/* The layout for `console` (an unknown console gets the SMS1 one): a static
+ * table, valid for the life of the process. *count, *width, *height may be
+ * NULL. */
+const sms_control *smssession_controls_layout(int console, int *count,
+                                              float *width, float *height);
+/* The index of the topmost pressable control (SWITCH, DIRECTION, BUTTON, or
+ * the DPAD's disc) at layout point (xpos, ypos), or -1. The disc is a circle; the
+ * four arms win where they overlap it. */
+int smssession_controls_hit(int console, float xpos, float ypos);
+/* The D-pad directions (an sms_action mask, 0 to 2 bits) a drag vector from
+ * the disc's centre selects: 0 inside a quarter of `radius`, else one of
+ * eight 45-degree sectors. +y is toward the player (down). `radius <= 0`
+ * selects nothing. Pass 1.55 * the pixels-per-unit for the DPAD disc. */
+unsigned smssession_dpad_from_vector(float delx, float dely, float radius);
+/* "PAUSE", "RESET" or "RAPID" for a console button (an sms_switch) on this
+ * console, NULL where the model has none. */
+const char *smssession_switch_label(int console, int swnum);
 
 /* ---- cross-thread system actions ------------------------------------------
  * The gamepad thread cannot call into a UI toolkit, so a system action it

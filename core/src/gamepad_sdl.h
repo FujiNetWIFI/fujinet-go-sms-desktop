@@ -21,6 +21,18 @@ extern "C" {
 #define SMS_DIR_LEFT  4
 #define SMS_DIR_RIGHT 8
 
+/* An analog stick engages a direction at 0.35 of full deflection and lets go
+ * below 0.15: low enough that a worn stick still registers, high enough that
+ * resting drift does not, and a gap wide enough that jitter across one
+ * threshold cannot flutter. */
+#define SMS_STICK_ENTER 0.35f
+#define SMS_STICK_EXIT  0.15f
+
+/* The stick's (or the D-pad's) direction bits as the joypad's contacts, a
+ * mask over sms_action. Opposite directions cancel, so a stick pushed both
+ * ways holds neither. Pure. */
+unsigned sms_acts_from_dir(int dir);
+
 /* An analog stick as a four-way switch with hysteresis: an axis engages
  * past `enter` and releases below `exit` (both 0..1 of full deflection),
  * so a thumb resting near the threshold cannot flutter. `prev` is the

@@ -34,6 +34,33 @@ int main(void)
     check(sms_dir_from_stick(0.6f, 0.05f, 0, 0.35f, 0.15f) == SMS_DIR_RIGHT,
           "a pure horizontal picks up no vertical noise");
 
+    /* the thresholds are the constants (a third engages, a sixth releases) */
+    check(SMS_STICK_ENTER > 0.34f && SMS_STICK_ENTER < 0.36f && SMS_STICK_EXIT > 0.14f && SMS_STICK_EXIT < 0.16f,
+          "the stick engages at 0.35 and releases at 0.15");
+    check(sms_dir_from_stick(SMS_STICK_ENTER + 0.01f, 0.f, 0, SMS_STICK_ENTER, SMS_STICK_EXIT) == SMS_DIR_RIGHT
+          && sms_dir_from_stick(SMS_STICK_ENTER - 0.01f, 0.f, 0, SMS_STICK_ENTER, SMS_STICK_EXIT) == 0,
+          "just past the engage threshold engages; just short of it does not");
+    check(sms_dir_from_stick(SMS_STICK_EXIT + 0.01f, 0.f, SMS_DIR_RIGHT, SMS_STICK_ENTER, SMS_STICK_EXIT) == SMS_DIR_RIGHT
+          && sms_dir_from_stick(SMS_STICK_EXIT - 0.01f, 0.f, SMS_DIR_RIGHT, SMS_STICK_ENTER, SMS_STICK_EXIT) == 0,
+          "an engaged stick holds until it falls below the release threshold");
+    check(sms_dir_from_stick(0.f, -0.5f, 0, SMS_STICK_ENTER, SMS_STICK_EXIT) == SMS_DIR_UP
+          && sms_dir_from_stick(0.f, 0.5f, 0, SMS_STICK_ENTER, SMS_STICK_EXIT) == SMS_DIR_DOWN
+          && sms_dir_from_stick(-0.5f, 0.f, 0, SMS_STICK_ENTER, SMS_STICK_EXIT) == SMS_DIR_LEFT,
+          "up is negative y (SDL's), down positive, left negative x");
+
+    /* direction bits (a stick, a raw joystick's hat) as the joypad's contacts */
+    check(sms_acts_from_dir(0) == 0 && sms_acts_from_dir(SMS_DIR_UP) == (1u << SMS_ACT_UP)
+          && sms_acts_from_dir(SMS_DIR_DOWN) == (1u << SMS_ACT_DOWN)
+          && sms_acts_from_dir(SMS_DIR_LEFT) == (1u << SMS_ACT_LEFT)
+          && sms_acts_from_dir(SMS_DIR_RIGHT) == (1u << SMS_ACT_RIGHT),
+          "each direction is its contact");
+    check(sms_acts_from_dir(SMS_DIR_UP | SMS_DIR_RIGHT) == ((1u << SMS_ACT_UP) | (1u << SMS_ACT_RIGHT))
+          && sms_acts_from_dir(SMS_DIR_DOWN | SMS_DIR_LEFT) == ((1u << SMS_ACT_DOWN) | (1u << SMS_ACT_LEFT)),
+          "a diagonal is two contacts");
+    check(sms_acts_from_dir(SMS_DIR_UP | SMS_DIR_DOWN) == 0 && sms_acts_from_dir(SMS_DIR_LEFT | SMS_DIR_RIGHT) == 0
+          && sms_acts_from_dir(SMS_DIR_UP | SMS_DIR_DOWN | SMS_DIR_LEFT) == (1u << SMS_ACT_LEFT),
+          "opposite directions cancel");
+
     /* port assignment */
     assign[0] = -1; assign[1] = -1; assign[2] = -1;
     check(sms_pad_for_port(assign, 2, 0) == 0 && sms_pad_for_port(assign, 2, 1) == 1,

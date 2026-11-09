@@ -10,6 +10,8 @@ set(SMS_SESSION_SOURCES
   src/fujinet_runtime.c
   src/audio_sdl.c
   src/bindings.c
+  src/controls.c
+  src/input.c
   src/hid_keys.c
   src/gamepad_sdl.c
   src/debug.c
