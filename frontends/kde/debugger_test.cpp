@@ -1314,8 +1314,11 @@ private slots:
         bool said = false;
         for (QLabel *l : page->findChildren<QLabel *>()) said |= l->text().contains(QLatin1String("Nothing to break on"));
         QVERIFY(said);
-        /* a program that turns the display on (R1 = $E0), run for a few frames */
-        const uint8_t displayOn[] = { 0x3E, 0xE0, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF, 0x18, 0xFE };
+        /* a program that selects mode 4 (R0 = $06) and turns the display on (R1 = $E0), run for a few
+         * frames: CONFIG may not have left the power-on TMS mode yet when the test gets here, and its
+         * frame interrupt could rewrite the registers, so DI first */
+        const uint8_t displayOn[] = { 0xF3, 0x3E, 0x06, 0xD3, 0xBF, 0x3E, 0x80, 0xD3, 0xBF,
+                                      0x3E, 0xE0, 0xD3, 0xBF, 0x3E, 0x81, 0xD3, 0xBF, 0x18, 0xFE };
         for (size_t i = 0; i < sizeof displayOn; i++) smsdebug_write(m_d, (uint16_t)(0xC300 + i), displayOn[i]);
         smsdebug_cpu_set(m_d, SMS_REG_PC, 0xC300);
         smsdebug_cpu c, c2;
