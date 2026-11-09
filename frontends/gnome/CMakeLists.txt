@@ -39,7 +39,7 @@ add_executable(fujinet-go-sms-gnome
   debugger/dbg_window.c
 )
 target_link_libraries(fujinet-go-sms-gnome
-  PRIVATE sms_session PkgConfig::GTK4 PkgConfig::ADW)
+  PRIVATE sms_session PkgConfig::GTK4 PkgConfig::ADW m)
 target_compile_options(fujinet-go-sms-gnome PRIVATE -Wall -Wextra)
 # Where the in-tree icon theme lives, for running uninstalled (see main.c).
 target_compile_definitions(fujinet-go-sms-gnome PRIVATE

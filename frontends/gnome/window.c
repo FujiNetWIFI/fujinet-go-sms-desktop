@@ -34,6 +34,12 @@
  * fall between two frames and never be seen. Six frames is a firm press. */
 #define TAP_MS 100
 
+/* The gamepad thread's system actions (a pad's Soft Reset) are taken this
+ * often; the Console menu's labels follow the bindings every SLOW_TICKS of
+ * them. */
+#define SYSACT_MS 50
+#define SLOW_TICKS 5
+
 typedef struct {
     SMSWindow *self;
     int sw;                     /* sms_switch */
@@ -55,6 +61,7 @@ struct _SMSWindow {
     TapCtx tap[SMS_SW_COUNT];
     gboolean sysact_down[SMS_SYSACT_COUNT];
     unsigned pad_generation;
+    unsigned slow_ticks;
     gboolean fullscreen;
 };
 
@@ -272,8 +279,9 @@ static void sync_console_menu(SMSWindow *self)
 }
 
 /* The gamepad thread cannot call into GTK; it posts system actions and this
- * timer takes them. It also watches for gamepads coming and going, and says
- * so: a pad that drops off Bluetooth mid-game should not be a mystery. */
+ * timer takes them (every SYSACT_MS). It also watches for gamepads coming
+ * and going, and says so: a pad that drops off Bluetooth mid-game should not
+ * be a mystery. */
 static gboolean sysact_drain_tick(gpointer user_data)
 {
     SMSWindow *self = user_data;
@@ -289,7 +297,10 @@ static gboolean sysact_drain_tick(gpointer user_data)
         if (smssession_gamepad_last_event(self->session, text, sizeof text) > 0)
             sms_window_toast(self, text);
     }
-    sync_console_menu(self);
+    if (++self->slow_ticks >= SLOW_TICKS) {
+        self->slow_ticks = 0;
+        sync_console_menu(self);
+    }
     return G_SOURCE_CONTINUE;
 }
 
@@ -909,7 +920,7 @@ GtkWidget *sms_window_new(AdwApplication *app, smssession *session)
     /* The current pad set is the baseline: no toast for pads that were
      * already plugged in at launch. */
     self->pad_generation = smssession_gamepad_generation(session);
-    self->sysact_id = g_timeout_add(250, sysact_drain_tick, self);
+    self->sysact_id = g_timeout_add(SYSACT_MS, sysact_drain_tick, self);
     sync_console_menu(self);
     update_status(self);
 

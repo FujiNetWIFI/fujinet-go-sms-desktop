@@ -23,6 +23,7 @@
 #include "fujilog.h"
 #include "window.h"
 #include "help/help_window.h"
+#include "controllers/controllers_window.h"
 
 #include <string.h>
 
@@ -403,6 +404,24 @@ static gboolean pad_tick(gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+/* ---- controls ----------------------------------------------------------------- */
+
+static void on_open_controllers(GtkButton *button, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    (void)button;
+    sms_controllers_window_show(GTK_WINDOW(state->window), state->session);
+}
+
+static void on_reset_controls(GtkButton *button, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    (void)button;
+    smssession_bindings_reset(state->session);
+    adw_preferences_dialog_add_toast(ADW_PREFERENCES_DIALOG(state->dialog),
+                                     adw_toast_new("Controls reset to defaults"));
+}
+
 /* ---- FujiNet ------------------------------------------------------------------ */
 
 static void on_open_webui(GtkButton *b, gpointer user_data)
@@ -442,6 +461,7 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
     AdwPreferencesGroup *audio = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     AdwPreferencesGroup *input = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     AdwPreferencesGroup *pads = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+    AdwPreferencesGroup *controls = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     AdwPreferencesGroup *fujinet = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
     GtkWidget *import, *external, *addr;
 
@@ -519,6 +539,7 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
 
     /* ---- input */
     adw_preferences_group_set_title(input, "Input");
+    adw_preferences_group_set_header_suffix(input, sms_help_button("prefs/Input"));
     adw_preferences_group_add(input,
         switch_row(state, "Enable gamepads", "Poll USB/Bluetooth gamepads "
                    "(applied when Preferences closes)", "enable_gamepad", 1, 0));
@@ -532,6 +553,27 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
         "Assigned to ports in connection order unless chosen here");
     rebuild_pad_rows(state);
     state->pad_generation = smssession_gamepad_generation(session);
+
+    adw_preferences_group_set_title(controls, "Controls");
+    adw_preferences_group_set_description(controls,
+        "Keys and gamepad buttons are mapped in the Controllers window (F9): "
+        "press Map, choose a control, then press the key or gamepad button "
+        "to give it.");
+    {
+        GtkWidget *ctl = info_row("Controllers window", "Map any of the 17 controls");
+        GtkWidget *rst = info_row("Reset Controls",
+                                  "Put every key and gamepad button back to its default");
+        GtkWidget *open = gtk_button_new_with_label("Open");
+        GtkWidget *reset = gtk_button_new_with_label("Reset");
+        gtk_widget_set_valign(open, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(reset, GTK_ALIGN_CENTER);
+        g_signal_connect(open, "clicked", G_CALLBACK(on_open_controllers), state);
+        g_signal_connect(reset, "clicked", G_CALLBACK(on_reset_controls), state);
+        adw_action_row_add_suffix(ADW_ACTION_ROW(ctl), open);
+        adw_action_row_add_suffix(ADW_ACTION_ROW(rst), reset);
+        adw_preferences_group_add(controls, ctl);
+        adw_preferences_group_add(controls, rst);
+    }
 
     /* ---- FujiNet */
     adw_preferences_group_set_title(fujinet, "FujiNet");
@@ -574,9 +616,10 @@ void sms_prefs_show(SMSWindow *parent, smssession *session,
     adw_preferences_page_add(page, audio);
     adw_preferences_page_add(page, input);
     adw_preferences_page_add(page, pads);
+    adw_preferences_page_add(page, controls);
     adw_preferences_page_add(page, fujinet);
     adw_preferences_dialog_add(dialog, page);
     g_signal_connect(dialog, "closed", G_CALLBACK(prefs_closed), state);
-    state->pad_timer = g_timeout_add(1000, pad_tick, state);
+    state->pad_timer = g_timeout_add(250, pad_tick, state);
     adw_dialog_present(ADW_DIALOG(dialog), GTK_WIDGET(parent));
 }
