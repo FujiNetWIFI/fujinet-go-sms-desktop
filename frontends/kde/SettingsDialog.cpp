@@ -68,7 +68,7 @@ int SettingsDialog::importBios(QWidget *parent, smssession *session, const QStri
     return idx;
 }
 
-bool SettingsDialog::run(QWidget *parent, smssession *session)
+bool SettingsDialog::run(QWidget *parent, smssession *session, bool *openControllers)
 {
     QDialog dlg(parent);
     dlg.setWindowTitle(QStringLiteral("Preferences"));
@@ -207,9 +207,30 @@ bool SettingsDialog::run(QWidget *parent, smssession *session)
     auto *inForm = new QFormLayout(input);
     QCheckBox *gp = check("Gamepads (applied by restarting the session)", "Poll USB/Bluetooth gamepads", session, "enable_gamepad", 1);
     inForm->addRow(gp);
-    QCheckBox *aj = check("Analog sticks drive the D-pad", "The left stick as the joypad's direction pad, as well as the D-pad", session, "analog_joystick", 1);
-    QObject::connect(aj, &QCheckBox::toggled, &dlg, [=](bool on) { smssession_set_analog(session, on ? 1 : 0); });
-    inForm->addRow(aj);
+    QCheckBox *analogBox = check("Left stick drives the D-pad", "The left stick as the joypad's direction pad, as well as the D-pad", session, "analog_joystick", 1);
+    QObject::connect(analogBox, &QCheckBox::toggled, &dlg, [=](bool enabled) { smssession_set_analog(session, enabled ? 1 : 0); });
+    inForm->addRow(analogBox);
+    /* Keys and gamepad buttons are mapped in the Controllers window */
+    auto *mapNote = new QLabel(QStringLiteral("Keys and gamepad buttons are mapped in the Controllers window (F9): "
+                                              "press Map, choose a control, then press the key or gamepad button."));
+    mapNote->setWordWrap(true);
+    mapNote->setStyleSheet(QStringLiteral("color: gray;"));
+    inForm->addRow(mapNote);
+    auto *resetControls = new QPushButton(QStringLiteral("Reset Controls"));
+    resetControls->setToolTip(QStringLiteral("Put every key and gamepad button back to its default"));
+    auto *openPad = new QPushButton(QStringLiteral("Open Controllers"));
+    auto *controlsNote = new QLabel;
+    controlsNote->setStyleSheet(QStringLiteral("color: gray;"));
+    auto *controlsRow = new QHBoxLayout;
+    controlsRow->addWidget(resetControls);
+    controlsRow->addWidget(openPad);
+    controlsRow->addWidget(controlsNote, 1);
+    controlsRow->addWidget(smsHelpButton(QStringLiteral("prefs/Input")));
+    inForm->addRow(controlsRow);
+    QObject::connect(resetControls, &QPushButton::clicked, &dlg, [=] {
+        smssession_bindings_reset(session);
+        controlsNote->setText(QStringLiteral("Controls reset to defaults"));
+    });
     outer->addWidget(input);
 
     /* Gamepads: one row per pad, refreshed as they come and go */
@@ -298,8 +319,19 @@ bool SettingsDialog::run(QWidget *parent, smssession *session)
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     outer->addWidget(buttons);
 
+    /* Open Controllers: as OK (so the address is checked), then the caller
+     * shows the window; if OK was refused the dialog stays and nothing is
+     * asked for */
+    bool wantControllers = false;
+    QObject::connect(openPad, &QPushButton::clicked, &dlg, [&] {
+        wantControllers = true;
+        buttons->button(QDialogButtonBox::Ok)->click();
+        if (dlg.result() != QDialog::Accepted) wantControllers = false;
+    });
+
     if (dlg.exec() != QDialog::Accepted)
         return false;
+    if (openControllers) *openControllers = wantControllers;
 
     bool changed = false;
     const int chosen = console->currentIndex();

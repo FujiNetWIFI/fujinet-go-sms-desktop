@@ -18,3 +18,9 @@
 
 /* Returns the keysym, or 0 when the key has no equivalent worth forwarding. */
 uint32_t smsKeysymFromQt(const QKeyEvent *e);
+
+/* The app's own keys: F9 (Controllers), F11 (fullscreen) and F12
+ * (Debugger). They are never sent to the console and cannot be bound. The
+ * menus' Ctrl shortcuts are not listed: Qt takes those before a key event
+ * exists, and a bare Ctrl is the console's. */
+bool smsIsAppKey(const QKeyEvent *evt);

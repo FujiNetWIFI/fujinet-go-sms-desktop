@@ -26,6 +26,13 @@ QColor smsAccentColor()
                   SMSSESSION_ACCENT_RGB & 0xff);
 }
 
+QColor smsAccentDarkColor()
+{
+    return QColor((SMSSESSION_ACCENT_DARK_RGB >> 16) & 0xff,
+                  (SMSSESSION_ACCENT_DARK_RGB >> 8) & 0xff,
+                  SMSSESSION_ACCENT_DARK_RGB & 0xff);
+}
+
 void fujinet_log_show(QWidget *parent, smssession *session)
 {
     static QPointer<QWidget> win;

@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include <QColor>
 #include <QWidget>
 
 extern "C" {
@@ -21,3 +22,5 @@ void fujinet_config_show(QWidget *parent, smssession *session);
 
 /* The accent colour (the Master System red), for highlights. */
 QColor smsAccentColor();
+/* Its darker variant: ink on an accent fill, and outlines. */
+QColor smsAccentDarkColor();

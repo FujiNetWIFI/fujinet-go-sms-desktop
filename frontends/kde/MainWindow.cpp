@@ -70,7 +70,7 @@ MainWindow::MainWindow(smssession *session, QWidget *parent)
     /* The gamepad thread cannot call into Qt; it posts system actions and
      * this timer takes them. */
     connect(&m_sysactTimer, &QTimer::timeout, this, &MainWindow::drainSysactions);
-    m_sysactTimer.start(100);
+    m_sysactTimer.start(50);
     /* Gamepads come and go on their own thread; say so when they do. */
     m_padGen = smssession_gamepad_generation(session);
     connect(&m_padTimer, &QTimer::timeout, this, &MainWindow::pollGamepads);
@@ -230,10 +230,14 @@ void MainWindow::showAbout()
 
 void MainWindow::showSettings()
 {
-    const bool restart = SettingsDialog::run(this, m_session);
+    bool openControllers = false;
+    const bool restart = SettingsDialog::run(this, m_session, &openControllers);
     applyPicture();
     syncMachineMenu();
     if (restart) restartSession();
+    smsControllersRefresh();
+    /* the modal dialog could not show it: it is shown now it has closed */
+    if (openControllers) smsControllersShow(this, m_session);
 }
 
 void MainWindow::useSoftwareDisplay()
@@ -280,9 +284,7 @@ void MainWindow::restartSession()
 
 void MainWindow::toggleControllers()
 {
-    if (!m_controllers) m_controllers = new ControllersWindow(m_session, this);
-    if (m_controllers->isVisible()) m_controllers->hide();
-    else m_controllers->show();
+    smsControllersToggle(this, m_session);
 }
 
 /* A console button from the menu: pressed, then released a few frames
@@ -376,6 +378,7 @@ void MainWindow::keyPressEvent(QKeyEvent *e)
     if (e->isAutoRepeat()) return;
     if (e->key() == Qt::Key_F9) { toggleControllers(); return; }
     if (e->key() == Qt::Key_F12) { DebuggerWindow::toggleFor(this, m_session); return; }
+    if (smsIsAppKey(e)) { QMainWindow::keyPressEvent(e); return; }
     if (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) { QMainWindow::keyPressEvent(e); return; }
 
     const uint32_t ks = smsKeysymFromQt(e);

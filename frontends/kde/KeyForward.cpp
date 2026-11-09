@@ -9,6 +9,12 @@
 
 #include "smssession.h"
 
+bool smsIsAppKey(const QKeyEvent *evt)
+{
+    const int key = evt->key();
+    return key == Qt::Key_F9 || key == Qt::Key_F11 || key == Qt::Key_F12;
+}
+
 uint32_t smsKeysymFromQt(const QKeyEvent *e)
 {
     /* On X11 and Wayland Qt reports the X keycode, which is the evdev code

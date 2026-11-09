@@ -13,7 +13,6 @@
 #include "smssession.h"
 
 class DisplayView;
-class ControllersWindow;
 class QAction;
 
 class MainWindow : public QMainWindow {
@@ -50,7 +49,6 @@ private:
 
     smssession *m_session;
     DisplayView *m_display = nullptr;
-    ControllersWindow *m_controllers = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_dot = nullptr;
     QTimer m_statusTimer;

@@ -19,8 +19,10 @@ extern "C" {
 class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
-    /* Returns true if a restart option changed. */
-    static bool run(QWidget *parent, smssession *session);
+    /* Returns true if a restart option changed. "Open Controllers" closes
+     * the dialog like OK and sets *openControllers (if given), for the
+     * caller to show the window: a modal dialog cannot have it over it. */
+    static bool run(QWidget *parent, smssession *session, bool *openControllers = nullptr);
     /* Import BIOS: the user's own BIOS or YM2413 patch ROM, from `path` or,
      * when it is empty, a file chooser. Shows the session's message, which
      * always says what happened. Returns the image's index, or -1 (also
