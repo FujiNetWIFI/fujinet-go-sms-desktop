@@ -113,21 +113,18 @@ static inline char *mkdtemp(char *tmpl)
 }
 #endif
 #if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 12 && !defined(TIME_UTC)
-/* ... and C11 timespec_get()/TIME_UTC (the H89 desktop's boot_smoke.c uses them). */
+/* ... and C11 timespec_get()/TIME_UTC (the H89 desktop's boot_smoke.c uses them). Built on
+   gettimeofday() so that no <windows.h> is pulled into every file: it defines `interface`. */
 #include <time.h>
-#include <windows.h>
+#include <sys/time.h>
 #define TIME_UTC 1
 static inline int timespec_get(struct timespec *ts, int base)
 {
-    FILETIME ft;
-    unsigned long long t;
-    if (base != TIME_UTC)
+    struct timeval tv;
+    if (base != TIME_UTC || gettimeofday(&tv, 0) != 0)
         return 0;
-    GetSystemTimeAsFileTime(&ft);
-    t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-    t -= 116444736000000000ULL; /* 1601 to 1970 */
-    ts->tv_sec = (time_t)(t / 10000000ULL);
-    ts->tv_nsec = (long)((t % 10000000ULL) * 100);
+    ts->tv_sec = tv.tv_sec;
+    ts->tv_nsec = (long)tv.tv_usec * 1000;
     return base;
 }
 #endif
