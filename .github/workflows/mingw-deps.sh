@@ -94,4 +94,29 @@ cmake -S SDL3-3.4.12 -B sdl3-build "${CMAKE_DEP[@]}" -DSDL_SHARED=OFF -DSDL_STAT
 cmake --build sdl3-build -j"$JOBS"
 cmake --install sdl3-build
 
+# Ubuntu's MinGW (11.0) lacks mkdtemp(), which some of the repos' tests call (MSYS2's newer
+# mingw-w64 has it). A guarded shim, included into every C/C++ file through the toolchain
+# file; written last so the dependency builds above are unaffected.
+cat > "$PREFIX/mkdtemp-shim.h" <<'EOF'
+#ifndef FN_MKDTEMP_SHIM_H
+#define FN_MKDTEMP_SHIM_H
+#include <direct.h>
+#include <io.h>
+#include <string.h>
+#include <_mingw.h>
+#if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 12
+static inline char *mkdtemp(char *tmpl)
+{
+    if (_mktemp_s(tmpl, strlen(tmpl) + 1) != 0 || _mkdir(tmpl) != 0)
+        return 0;
+    return tmpl;
+}
+#endif
+#endif
+EOF
+cat >> "$PREFIX/toolchain.cmake" <<EOF
+set(CMAKE_C_FLAGS_INIT "-include $PREFIX/mkdtemp-shim.h")
+set(CMAKE_CXX_FLAGS_INIT "-include $PREFIX/mkdtemp-shim.h")
+EOF
+
 echo "MinGW dependencies installed in $PREFIX"
