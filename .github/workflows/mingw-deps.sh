@@ -112,6 +112,25 @@ static inline char *mkdtemp(char *tmpl)
     return tmpl;
 }
 #endif
+#if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 12 && !defined(TIME_UTC)
+/* ... and C11 timespec_get()/TIME_UTC (the H89 desktop's boot_smoke.c uses them). */
+#include <time.h>
+#include <windows.h>
+#define TIME_UTC 1
+static inline int timespec_get(struct timespec *ts, int base)
+{
+    FILETIME ft;
+    unsigned long long t;
+    if (base != TIME_UTC)
+        return 0;
+    GetSystemTimeAsFileTime(&ft);
+    t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL; /* 1601 to 1970 */
+    ts->tv_sec = (time_t)(t / 10000000ULL);
+    ts->tv_nsec = (long)((t % 10000000ULL) * 100);
+    return base;
+}
+#endif
 #if defined(__cplusplus) && defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 12
 /* The msvcrt headers also lack std::c16rtomb (Mesen's UTF8Util.cpp uses it): UTF-16 to UTF-8, with
    a high surrogate held in the mbstate_t between calls. */
