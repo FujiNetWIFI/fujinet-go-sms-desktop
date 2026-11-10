@@ -33,8 +33,8 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 # fujinet_pc.cmake overrides CMAKE_EXE_LINKER_FLAGS, so -static and the library path ride here
-set(CMAKE_C_STANDARD_LIBRARIES "-L$PREFIX/lib -static -lws2_32 -lcrypt32 -lbcrypt -luuid" CACHE STRING "")
-set(CMAKE_CXX_STANDARD_LIBRARIES "-L$PREFIX/lib -static -lws2_32 -lcrypt32 -lbcrypt -luuid" CACHE STRING "")
+set(CMAKE_C_STANDARD_LIBRARIES "-L$PREFIX/lib -static -lws2_32 -lcrypt32 -lbcrypt -luuid -lole32" CACHE STRING "")
+set(CMAKE_CXX_STANDARD_LIBRARIES "-L$PREFIX/lib -static -lws2_32 -lcrypt32 -lbcrypt -luuid -lole32" CACHE STRING "")
 EOF
 
 mkdir -p "$WORK"
