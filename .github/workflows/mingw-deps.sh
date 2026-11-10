@@ -112,6 +112,38 @@ static inline char *mkdtemp(char *tmpl)
     return tmpl;
 }
 #endif
+#if defined(__cplusplus) && defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 12
+/* The msvcrt headers also lack std::c16rtomb (Mesen's UTF8Util.cpp uses it): UTF-16 to UTF-8, with
+   a high surrogate held in the mbstate_t between calls. */
+#include <cstddef>
+#include <cwchar>
+namespace std {
+inline size_t c16rtomb(char *out, char16_t unit, mbstate_t *state)
+{
+    static mbstate_t own;
+    unsigned *high = reinterpret_cast<unsigned *>(state ? state : &own);
+    unsigned cp = unit;
+    if (*high) {
+        if (unit < 0xDC00 || unit > 0xDFFF) { *high = 0; return (size_t)-1; }
+        cp = 0x10000 + ((*high - 0xD800) << 10) + (unit - 0xDC00);
+        *high = 0;
+    } else if (unit >= 0xD800 && unit <= 0xDBFF) {
+        *high = unit;
+        return 0;
+    } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+        return (size_t)-1;
+    }
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) { out[0] = (char)(0xC0 | cp >> 6); out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | cp >> 12); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F)); return 3;
+    }
+    out[0] = (char)(0xF0 | cp >> 18); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F)); return 4;
+}
+}
+#endif
 #endif
 EOF
 cat >> "$PREFIX/toolchain.cmake" <<EOF
