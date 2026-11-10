@@ -43,7 +43,7 @@ jobs:
             && MIRROR=http://host.docker.internal:3142/mirrors.edge.kernel.org/ubuntu
           sed -i "s|http://[a-z.]*ubuntu.com/ubuntu|$MIRROR|" /etc/apt/sources.list.d/ubuntu.sources
           apt-get update
-          apt-get install -y --no-install-recommends git ca-certificates curl flatpak flatpak-builder
+          apt-get install -y --no-install-recommends git ca-certificates curl flatpak flatpak-builder elfutils
           flatpak remote-add --if-not-exists --user flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
 
