@@ -76,7 +76,14 @@
     <!-- The CURRENT release templates its version from @PROJECT_VERSION@, so
          it cannot disagree with the tree; past releases are literal. The
          release job checks that this first entry is still a template. -->
-    <release version="@PROJECT_VERSION@" date="2026-11-09">
+    <release version="@PROJECT_VERSION@" date="2026-11-13">
+      <description>
+        <p>
+          Fixed a crash when quitting the app on macOS.
+        </p>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-11-09">
       <description>
         <p>
           Debugger rebuilt like the other FujiNet Go desktops: Console, Disassembly, Memory, Breakpoints, Watches, Cart &amp; I/O, Trace, History, Video, Sound, Symbols and FujiNet tabs, a registers strip with editable flags, breakpoints on memory, ports, video RAM and colour RAM with conditions (value, addr, old), memory search, watches, symbols, and Pop Out. The Video tab redraws video RAM through each line's own scroll and registers, with a pixel inspector, overlays, a colour table and a per-line table. Controllers window with per-port pad mapping.

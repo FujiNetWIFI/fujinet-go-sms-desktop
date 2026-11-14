@@ -339,7 +339,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
  * are still down. */
 - (void)windowDidResignKey:(NSNotification *)note
 {
-    if (note.object == _window) smssession_release_all(_session);
+    if (_session && note.object == _window) smssession_release_all(_session);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app
@@ -352,6 +352,11 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
     (void)note;
     _terminating = YES;
+    /* Close the windows while the session is alive: AppKit closes them after
+     * this returns, and their resign-key / will-close handlers use it. */
+    _window.delegate = nil;
+    for (NSWindow *w in [[NSApp windows] copy])
+        if (w != _window) [w close];
     [_statusTimer invalidate];
     [_sysactTimer invalidate];
     [_settingsTimer invalidate];
