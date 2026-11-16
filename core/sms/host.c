@@ -14,11 +14,15 @@
 
 #include "host.h"
 #include "smsvidcap.h"
+#include "audioring.h"
 
 #include <pthread.h>
 #include <sched.h>
 #if defined(__APPLE__)
 #include <pthread/qos.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #endif
 #include <stdatomic.h>
 #include <stdio.h>
@@ -279,85 +283,31 @@ void sms_host_publish_frame(void)
     frame_publish(s_machine.vdp.fb, s_machine.vdp.fb_height);
 }
 
-/* ---- audio ring: interleaved stereo frames ---- */
+/* ---- audio ring: interleaved stereo frames ----
+ * Lock-free and rate-controlled (audioring.h): the producer stretches or
+ * squeezes the machine's audio by up to 0.5% to hold the fill at the target,
+ * so a display-locked frame clock never overfills it and nothing has to be
+ * trimmed away with a click. */
 
-#define RING_CAPACITY          (SMS_AUDIO_RATE / 2)
-#define RING_TARGET_FRAMES     (SMS_AUDIO_RATE / 33)
-#define RING_HIGHWATER_FRAMES  (SMS_AUDIO_RATE / 10)
+#define RING_TARGET_FRAMES     (SMS_AUDIO_RATE / 30)   /* ~33 ms: two frames */
+#define RING_EMERGENCY_FRAMES  (SMS_AUDIO_RATE / 4)    /* a stall, not drift */
 
-static pthread_mutex_t s_audio_lock = PTHREAD_MUTEX_INITIALIZER;
-static float s_ring[RING_CAPACITY * 2];
-static int s_head = 0;
-static int s_count = 0;
-static int s_primed = 0;
+static audioring s_ring;
 
 static void audio_publish(const float *frames, int count)
 {
-    if (count <= 0)
-        return;
-    if (count > RING_CAPACITY)
-    {
-        frames += 2 * (count - RING_CAPACITY);
-        count = RING_CAPACITY;
-    }
-
-    pthread_mutex_lock(&s_audio_lock);
-    for (int i = 0; i < count; i++)
-    {
-        s_ring[2 * s_head] = frames[2 * i];
-        s_ring[2 * s_head + 1] = frames[2 * i + 1];
-        s_head = (s_head + 1) % RING_CAPACITY;
-    }
-    s_count += count;
-    if (s_count > RING_CAPACITY)
-        s_count = RING_CAPACITY;
-    pthread_mutex_unlock(&s_audio_lock);
+    audioring_push(&s_ring, frames, count, RING_TARGET_FRAMES);
 }
 
 int sms_host_audio_copy(float *dst, int max_frames)
 {
-    pthread_mutex_lock(&s_audio_lock);
-
-    /* Catch up on lag before copying anything: trim to a small fixed
-     * cushion of RECENT audio, never scaled by the caller's request. */
-    if (s_count > RING_HIGHWATER_FRAMES)
-        s_count = RING_TARGET_FRAMES;
-
-    /* Prime gate: no output until a target's worth has accumulated, so a
-     * production burst does not dribble out as several under-filled
-     * requests. Primed until the ring runs completely dry. */
-    if (!s_primed)
-    {
-        if (s_count < RING_TARGET_FRAMES)
-        {
-            pthread_mutex_unlock(&s_audio_lock);
-            return 0;
-        }
-        s_primed = 1;
-    }
-
-    const int n = (max_frames < s_count) ? max_frames : s_count;
-    int read_pos = ((s_head - s_count) % RING_CAPACITY + RING_CAPACITY) % RING_CAPACITY;
-    for (int i = 0; i < n; i++)
-    {
-        dst[2 * i] = s_ring[2 * read_pos];
-        dst[2 * i + 1] = s_ring[2 * read_pos + 1];
-        read_pos = (read_pos + 1) % RING_CAPACITY;
-    }
-    s_count -= n;
-    if (s_count == 0)
-        s_primed = 0;
-    pthread_mutex_unlock(&s_audio_lock);
-    return n;
+    return audioring_pull(&s_ring, dst, max_frames, RING_TARGET_FRAMES,
+                          RING_EMERGENCY_FRAMES);
 }
 
 void sms_host_audio_reset(void)
 {
-    pthread_mutex_lock(&s_audio_lock);
-    s_head = 0;
-    s_count = 0;
-    s_primed = 0;
-    pthread_mutex_unlock(&s_audio_lock);
+    audioring_flush(&s_ring);
 }
 
 /* ---- inputs ---- */
@@ -550,6 +500,34 @@ static void pacing_end(void)
         s_period_set = 0;
     }
 }
+#elif defined(__APPLE__)
+/* macOS paces the way a game does: the machine thread asks the scheduler for
+ * a real-time slot (THREAD_TIME_CONSTRAINT_POLICY) -- one frame period, a few
+ * milliseconds of work, preemptible -- so a busy desktop or a power-saving core
+ * does not make a frame late. QOS_CLASS_USER_INTERACTIVE (set when the thread
+ * starts) stays as the fallback if the kernel refuses. */
+static mach_timebase_info_data_t s_tb;
+
+static uint64_t ns_to_mach(uint64_t ns)
+{
+    return ns * s_tb.denom / s_tb.numer;
+}
+
+static void pacing_begin(void)
+{
+    thread_time_constraint_policy_data_t p;
+
+    mach_timebase_info(&s_tb);
+    p.period = (uint32_t)ns_to_mach((uint64_t)s_frame_ns);
+    p.computation = (uint32_t)ns_to_mach(5000000ULL);       /* ~5 ms of work */
+    p.constraint = (uint32_t)ns_to_mach((uint64_t)s_frame_ns);
+    p.preemptible = 1;
+    mach_port_t self = mach_thread_self();
+    thread_policy_set(self, THREAD_TIME_CONSTRAINT_POLICY,
+                      (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    mach_port_deallocate(mach_task_self(), self);
+}
+static void pacing_end(void) {}
 #else
 static void pacing_begin(void) {}
 static void pacing_end(void) {}
@@ -581,13 +559,12 @@ static void sleep_until(const struct timespec *next, const struct timespec *now)
     rel.tv_nsec = remain % 1000000000L;
     nanosleep(&rel, NULL);
 #elif defined(__APPLE__)
+    /* An absolute deadline on the mach clock: no drift between reading the
+     * time and starting the sleep, which a relative nanosleep has. */
     long remain = ts_diff_ns(next, now);
-    struct timespec rel;
     if (remain <= 0)
         return;
-    rel.tv_sec = remain / 1000000000L;
-    rel.tv_nsec = remain % 1000000000L;
-    nanosleep(&rel, NULL);
+    mach_wait_until(mach_absolute_time() + ns_to_mach((uint64_t)remain));
 #else
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL);
     (void)now;
@@ -829,7 +806,7 @@ int sms_host_start(const sms_host_opts_t *opts)
     sms_machine_init(&s_machine, opts->model, opts->bios, opts->bios_size, opts->instruments,
                      opts->fm_unit, opts->fm_unit_mutes_psg, s_cart);
     inputs_take(&s_machine);
-    sms_host_audio_reset();
+    audioring_producer_reset(&s_ring);
     atomic_store(&s_frames, 0);
 
     atomic_store(&s_stop_req, false);

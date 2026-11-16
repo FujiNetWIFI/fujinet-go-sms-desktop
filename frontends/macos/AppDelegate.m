@@ -118,6 +118,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     BOOL _terminating;
     NSWindow *_window;
     SMSDisplayView *_display;
+    id<NSObject> _activity;          /* no App Nap, no timer coalescing while we run */
     SMSContentView *_content;
     NSTimer *_statusTimer;
     NSTimer *_sysactTimer;
@@ -170,6 +171,13 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 - (void)applicationDidFinishLaunching:(NSNotification *)note
 {
     (void)note;
+
+    /* An emulator is latency-critical work: App Nap must not throttle the
+     * machine thread or coalesce its timers when the window is behind
+     * another, and Game Mode (Info.plist) asks the system to favour it. */
+    _activity = [[NSProcessInfo processInfo]
+        beginActivityWithOptions:(NSActivityUserInitiated | NSActivityLatencyCritical)
+                          reason:@"Emulating a Master System"];
 
     /* 268x224 at 8:7 pixels is about 306x224; three times that is a
      * comfortable first window on any Mac. */
@@ -362,6 +370,10 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [_settingsTimer invalidate];
     [_logTimer invalidate];
     [_display stop];
+    if (_activity) {
+        [[NSProcessInfo processInfo] endActivity:_activity];
+        _activity = nil;
+    }
     smssession_stop(_session);
     smssession_free(_session);
     _session = NULL;
